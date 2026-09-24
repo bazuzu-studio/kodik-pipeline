@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+tests
+data
+unmapped_genres.json
+genres_dropped.json
+README.md
+requirements-dev.txt
+pyproject.toml

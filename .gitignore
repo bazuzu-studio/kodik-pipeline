@@ -1,0 +1,16 @@
+# Secrets / local configuration
+.env
+.env.*.local
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Generated pipeline data
+data/*.json
+unmapped_genres.json
+genres_dropped.json

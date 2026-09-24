@@ -1,0 +1,552 @@
+[
+  {
+    "id": 1,
+    "title": "аниме",
+    "title_en": "anime",
+    "description": "Японские анимационные фильмы и сериалы, охватывающие множество жанров и стилей.",
+    "generate_slug": false,
+    "slug": "anime",
+    "updated_at": "2026-01-07 15:46:04.892+00",
+    "created_at": "2026-01-07 15:46:04.892+00"
+  },
+  {
+    "id": 2,
+    "title": "безумие",
+    "title_en": "madness",
+    "description": "Сюжеты, наполненные хаосом, безумием и непредсказуемыми поворотами.",
+    "generate_slug": false,
+    "slug": "madness",
+    "updated_at": "2026-01-07 15:46:05.681+00",
+    "created_at": "2026-01-07 15:46:05.681+00"
+  },
+  {
+    "id": 3,
+    "title": "биография",
+    "title_en": "biography",
+    "description": "Истории, основанные на реальной жизни известных личностей.",
+    "generate_slug": false,
+    "slug": "biography",
+    "updated_at": "2026-01-07 15:46:06.465+00",
+    "created_at": "2026-01-07 15:46:06.465+00"
+  },
+  {
+    "id": 4,
+    "title": "боевик",
+    "title_en": "action",
+    "description": "Динамичные истории с интенсивными боями и захватывающими сценами.",
+    "generate_slug": false,
+    "slug": "action",
+    "updated_at": "2026-01-07 15:46:07.257+00",
+    "created_at": "2026-01-07 15:46:07.257+00"
+  },
+  {
+    "id": 5,
+    "title": "боевые искусства",
+    "title_en": "martial arts",
+    "description": "Сюжеты, посвященные боевым искусствам и философии единоборств.",
+    "generate_slug": false,
+    "slug": "martial-arts",
+    "updated_at": "2026-01-07 15:46:08.039+00",
+    "created_at": "2026-01-07 15:46:08.038+00"
+  },
+  {
+    "id": 6,
+    "title": "вампиры",
+    "title_en": "vampires",
+    "description": "Истории о вампирах, их мифах и борьбе за существование.",
+    "generate_slug": false,
+    "slug": "vampires",
+    "updated_at": "2026-01-07 15:46:08.822+00",
+    "created_at": "2026-01-07 15:46:08.822+00"
+  },
+  {
+    "id": 7,
+    "title": "вестерн",
+    "title_en": "western",
+    "description": "Сюжеты, разворачивающиеся на Диком Западе с ковбоями и дуэлями.",
+    "generate_slug": false,
+    "slug": "western",
+    "updated_at": "2026-01-07 15:46:09.608+00",
+    "created_at": "2026-01-07 15:46:09.608+00"
+  },
+  {
+    "id": 8,
+    "title": "военное",
+    "title_en": "military",
+    "description": "Истории о военной жизни, стратегии и солдатах.",
+    "generate_slug": false,
+    "slug": "military",
+    "updated_at": "2026-01-07 15:46:10.391+00",
+    "created_at": "2026-01-07 15:46:10.39+00"
+  },
+  {
+    "id": 9,
+    "title": "военный",
+    "title_en": "war",
+    "description": "Сюжеты о войнах, их последствиях и влиянии на людей.",
+    "generate_slug": false,
+    "slug": "war",
+    "updated_at": "2026-01-07 15:46:11.174+00",
+    "created_at": "2026-01-07 15:46:11.174+00"
+  },
+  {
+    "id": 10,
+    "title": "гарем",
+    "title_en": "harem",
+    "description": "Романтические истории, где один персонаж окружен несколькими воздыхателями.",
+    "generate_slug": false,
+    "slug": "harem",
+    "updated_at": "2026-01-07 15:46:11.959+00",
+    "created_at": "2026-01-07 15:46:11.959+00"
+  },
+  {
+    "id": 11,
+    "title": "гурман",
+    "title_en": "gourmet",
+    "description": "Сюжеты о кулинарии, еде и гастрономии.",
+    "generate_slug": false,
+    "slug": "gourmet",
+    "updated_at": "2026-01-07 15:46:12.74+00",
+    "created_at": "2026-01-07 15:46:12.74+00"
+  },
+  {
+    "id": 12,
+    "title": "демоны",
+    "title_en": "demons",
+    "description": "Истории с демонами и их взаимодействием с людьми.",
+    "generate_slug": false,
+    "slug": "demons",
+    "updated_at": "2026-01-07 15:46:13.524+00",
+    "created_at": "2026-01-07 15:46:13.524+00"
+  },
+  {
+    "id": 13,
+    "title": "детектив",
+    "title_en": "detective",
+    "description": "Детективные сюжеты с загадками и расследованиями.",
+    "generate_slug": false,
+    "slug": "detective",
+    "updated_at": "2026-01-07 15:46:14.307+00",
+    "created_at": "2026-01-07 15:46:14.307+00"
+  },
+  {
+    "id": 14,
+    "title": "детский",
+    "title_en": "children's",
+    "description": "Сюжеты для детей с веселыми и поучительными темами.",
+    "generate_slug": false,
+    "slug": "childrens",
+    "updated_at": "2026-01-07 15:46:15.094+00",
+    "created_at": "2026-01-07 15:46:15.094+00"
+  },
+  {
+    "id": 15,
+    "title": "детское",
+    "title_en": "kids",
+    "description": "Развлекательный и образовательный контент для детей.",
+    "generate_slug": false,
+    "slug": "kids",
+    "updated_at": "2026-01-07 15:46:15.877+00",
+    "created_at": "2026-01-07 15:46:15.877+00"
+  },
+  {
+    "id": 16,
+    "title": "дзёсей",
+    "title_en": "josei",
+    "description": "Аниме и манга для взрослых женщин с реалистичными отношениями и драмой.",
+    "generate_slug": false,
+    "slug": "josei",
+    "updated_at": "2026-01-07 15:46:16.664+00",
+    "created_at": "2026-01-07 15:46:16.664+00"
+  },
+  {
+    "id": 17,
+    "title": "для взрослых",
+    "title_en": "adult",
+    "description": "Контент с темами, предназначенными для взрослой аудитории.",
+    "generate_slug": false,
+    "slug": "adult",
+    "updated_at": "2026-01-07 15:46:17.445+00",
+    "created_at": "2026-01-07 15:46:17.445+00"
+  },
+  {
+    "id": 18,
+    "title": "драма",
+    "title_en": "drama",
+    "description": "Эмоциональные сюжеты о человеческих отношениях и переживаниях.",
+    "generate_slug": false,
+    "slug": "drama",
+    "updated_at": "2026-01-07 15:46:18.228+00",
+    "created_at": "2026-01-07 15:46:18.228+00"
+  },
+  {
+    "id": 19,
+    "title": "игра",
+    "title_en": "game",
+    "description": "Истории, связанные с играми, соревнованиями и испытаниями.",
+    "generate_slug": false,
+    "slug": "game",
+    "updated_at": "2026-01-07 15:46:19.013+00",
+    "created_at": "2026-01-07 15:46:19.013+00"
+  },
+  {
+    "id": 20,
+    "title": "игры",
+    "title_en": "games",
+    "description": "Развлечения, посвященные играм, стратегиям и виртуальным мирам.",
+    "generate_slug": false,
+    "slug": "games",
+    "updated_at": "2026-01-07 15:46:19.812+00",
+    "created_at": "2026-01-07 15:46:19.812+00"
+  },
+  {
+    "id": 21,
+    "title": "исторический",
+    "title_en": "historical",
+    "description": "Сюжеты, основанные на исторических событиях и эпохах.",
+    "generate_slug": false,
+    "slug": "historical",
+    "updated_at": "2026-01-07 15:46:20.598+00",
+    "created_at": "2026-01-07 15:46:20.598+00"
+  },
+  {
+    "id": 22,
+    "title": "история",
+    "title_en": "history",
+    "description": "Повести о прошлом, значимых событиях и личностях.",
+    "generate_slug": false,
+    "slug": "history",
+    "updated_at": "2026-01-07 15:46:21.383+00",
+    "created_at": "2026-01-07 15:46:21.383+00"
+  },
+  {
+    "id": 23,
+    "title": "комедия",
+    "title_en": "comedy",
+    "description": "Юмористические истории, созданные для развлечения.",
+    "generate_slug": false,
+    "slug": "comedy",
+    "updated_at": "2026-01-07 15:46:22.173+00",
+    "created_at": "2026-01-07 15:46:22.173+00"
+  },
+  {
+    "id": 24,
+    "title": "короткометражка",
+    "title_en": "short film",
+    "description": "Короткие фильмы, исследующие творческие и экспериментальные идеи.",
+    "generate_slug": false,
+    "slug": "short-film",
+    "updated_at": "2026-01-07 15:46:22.956+00",
+    "created_at": "2026-01-07 15:46:22.956+00"
+  },
+  {
+    "id": 25,
+    "title": "космос",
+    "title_en": "space",
+    "description": "Приключения и исследования, происходящие в космосе.",
+    "generate_slug": false,
+    "slug": "space",
+    "updated_at": "2026-01-07 15:46:23.739+00",
+    "created_at": "2026-01-07 15:46:23.739+00"
+  },
+  {
+    "id": 26,
+    "title": "криминал",
+    "title_en": "crime",
+    "description": "Истории о преступлениях, расследованиях и справедливости.",
+    "generate_slug": false,
+    "slug": "crime",
+    "updated_at": "2026-01-07 15:46:24.523+00",
+    "created_at": "2026-01-07 15:46:24.523+00"
+  },
+  {
+    "id": 27,
+    "title": "машины",
+    "title_en": "cars",
+    "description": "Сюжеты о машинах, гонках и инженерии.",
+    "generate_slug": false,
+    "slug": "cars",
+    "updated_at": "2026-01-07 15:46:25.308+00",
+    "created_at": "2026-01-07 15:46:25.307+00"
+  },
+  {
+    "id": 28,
+    "title": "мелодрама",
+    "title_en": "romance",
+    "description": "Романтические истории с эмоциональными и драматическими моментами.",
+    "generate_slug": false,
+    "slug": "romance",
+    "updated_at": "2026-01-07 15:46:26.098+00",
+    "created_at": "2026-01-07 15:46:26.098+00"
+  },
+  {
+    "id": 29,
+    "title": "меха",
+    "title_en": "mecha",
+    "description": "Истории с участием гигантских роботов и механических костюмов.",
+    "generate_slug": false,
+    "slug": "mecha",
+    "updated_at": "2026-01-07 15:46:26.882+00",
+    "created_at": "2026-01-07 15:46:26.882+00"
+  },
+  {
+    "id": 30,
+    "title": "музыка",
+    "title_en": "music",
+    "description": "Сюжеты о музыкантах, группах и силе музыки.",
+    "generate_slug": false,
+    "slug": "music",
+    "updated_at": "2026-01-07 15:46:27.664+00",
+    "created_at": "2026-01-07 15:46:27.664+00"
+  },
+  {
+    "id": 31,
+    "title": "мультфильм",
+    "title_en": "cartoon",
+    "description": "Анимационный контент для всех возрастов.",
+    "generate_slug": false,
+    "slug": "cartoon",
+    "updated_at": "2026-01-07 15:46:28.444+00",
+    "created_at": "2026-01-07 15:46:28.444+00"
+  },
+  {
+    "id": 32,
+    "title": "мюзикл",
+    "title_en": "musical",
+    "description": "Истории, включающие песни и танцы.",
+    "generate_slug": false,
+    "slug": "musical",
+    "updated_at": "2026-01-07 15:46:29.226+00",
+    "created_at": "2026-01-07 15:46:29.226+00"
+  },
+  {
+    "id": 33,
+    "title": "пародия",
+    "title_en": "parody",
+    "description": "Юмористические пародии на популярные жанры или произведения.",
+    "generate_slug": false,
+    "slug": "parody",
+    "updated_at": "2026-01-07 15:46:30.008+00",
+    "created_at": "2026-01-07 15:46:30.008+00"
+  },
+  {
+    "id": 34,
+    "title": "повседневность",
+    "title_en": "slice of life",
+    "description": "Реалистичные истории о повседневной жизни.",
+    "generate_slug": false,
+    "slug": "slice-of-life",
+    "updated_at": "2026-01-07 15:46:30.797+00",
+    "created_at": "2026-01-07 15:46:30.797+00"
+  },
+  {
+    "id": 35,
+    "title": "полиция",
+    "title_en": "police",
+    "description": "Истории о работе полиции и борьбе с преступностью.",
+    "generate_slug": false,
+    "slug": "police",
+    "updated_at": "2026-01-07 15:46:31.597+00",
+    "created_at": "2026-01-07 15:46:31.597+00"
+  },
+  {
+    "id": 36,
+    "title": "приключения",
+    "title_en": "adventure",
+    "description": "Захватывающие сюжеты о путешествиях и открытиях.",
+    "generate_slug": false,
+    "slug": "adventure",
+    "updated_at": "2026-01-07 15:46:32.382+00",
+    "created_at": "2026-01-07 15:46:32.382+00"
+  },
+  {
+    "id": 37,
+    "title": "психологическое",
+    "title_en": "psychological",
+    "description": "Истории, исследующие человеческий разум и эмоции.",
+    "generate_slug": false,
+    "slug": "psychological",
+    "updated_at": "2026-01-07 15:46:33.166+00",
+    "created_at": "2026-01-07 15:46:33.166+00"
+  },
+  {
+    "id": 38,
+    "title": "работа",
+    "title_en": "work",
+    "description": "Сюжеты о трудовых буднях и карьерных отношениях.",
+    "generate_slug": false,
+    "slug": "work",
+    "updated_at": "2026-01-07 15:46:33.952+00",
+    "created_at": "2026-01-07 15:46:33.952+00"
+  },
+  {
+    "id": 39,
+    "title": "самураи",
+    "title_en": "samurai",
+    "description": "Истории о самураях, их чести и сражениях.",
+    "generate_slug": false,
+    "slug": "samurai",
+    "updated_at": "2026-01-07 15:46:35.003+00",
+    "created_at": "2026-01-07 15:46:35.003+00"
+  },
+  {
+    "id": 40,
+    "title": "сверхъестественное",
+    "title_en": "supernatural",
+    "description": "Сюжеты с участием сверхъестественных явлений и существ.",
+    "generate_slug": false,
+    "slug": "supernatural",
+    "updated_at": "2026-01-07 15:46:35.787+00",
+    "created_at": "2026-01-07 15:46:35.787+00"
+  },
+  {
+    "id": 41,
+    "title": "семейный",
+    "title_en": "family",
+    "description": "Контент, подходящий для всей семьи, с упором на семейные ценности.",
+    "generate_slug": false,
+    "slug": "family",
+    "updated_at": "2026-01-07 15:46:36.574+00",
+    "created_at": "2026-01-07 15:46:36.574+00"
+  },
+  {
+    "id": 42,
+    "title": "спорт",
+    "title_en": "sports",
+    "description": "Истории о спортивных состязаниях и командной работе.",
+    "generate_slug": false,
+    "slug": "sports",
+    "updated_at": "2026-01-07 15:46:37.375+00",
+    "created_at": "2026-01-07 15:46:37.375+00"
+  },
+  {
+    "id": 43,
+    "title": "супер сила",
+    "title_en": "superpower",
+    "description": "Сюжеты с героями, обладающими необычными способностями.",
+    "generate_slug": false,
+    "slug": "superpower",
+    "updated_at": "2026-01-07 15:46:38.157+00",
+    "created_at": "2026-01-07 15:46:38.157+00"
+  },
+  {
+    "id": 44,
+    "title": "сэйнэн",
+    "title_en": "seinen",
+    "description": "Аниме и манга для взрослых мужчин с более глубокими темами.",
+    "generate_slug": false,
+    "slug": "seinen",
+    "updated_at": "2026-01-07 15:46:38.94+00",
+    "created_at": "2026-01-07 15:46:38.94+00"
+  },
+  {
+    "id": 45,
+    "title": "сёдзё",
+    "title_en": "shoujo",
+    "description": "Аниме и манга для девушек, посвященные романтике и драме.",
+    "generate_slug": false,
+    "slug": "shoujo",
+    "updated_at": "2026-01-07 15:46:39.727+00",
+    "created_at": "2026-01-07 15:46:39.727+00"
+  },
+  {
+    "id": 46,
+    "title": "сёдзё-ай",
+    "title_en": "shoujo-ai",
+    "description": "Романтические истории о взаимоотношениях между женщинами.",
+    "generate_slug": false,
+    "slug": "shoujo-ai",
+    "updated_at": "2026-01-07 15:46:40.517+00",
+    "created_at": "2026-01-07 15:46:40.517+00"
+  },
+  {
+    "id": 47,
+    "title": "сёнен",
+    "title_en": "shounen",
+    "description": "Аниме и манга для юношей с акцентом на действия и развитие персонажей.",
+    "generate_slug": false,
+    "slug": "shounen",
+    "updated_at": "2026-01-07 15:46:41.304+00",
+    "created_at": "2026-01-07 15:46:41.304+00"
+  },
+  {
+    "id": 48,
+    "title": "сёнен-ай",
+    "title_en": "shounen-ai",
+    "description": "Романтические истории о взаимоотношениях между мужчинами.",
+    "generate_slug": false,
+    "slug": "shounen-ai",
+    "updated_at": "2026-01-07 15:46:42.088+00",
+    "created_at": "2026-01-07 15:46:42.087+00"
+  },
+  {
+    "id": 49,
+    "title": "триллер",
+    "title_en": "thriller",
+    "description": "Напряженные сюжеты, держащие зрителей в постоянном напряжении.",
+    "generate_slug": false,
+    "slug": "thriller",
+    "updated_at": "2026-01-07 15:46:42.871+00",
+    "created_at": "2026-01-07 15:46:42.871+00"
+  },
+  {
+    "id": 50,
+    "title": "ужасы",
+    "title_en": "horror",
+    "description": "Истории, созданные, чтобы пугать и восхищать.",
+    "generate_slug": false,
+    "slug": "horror",
+    "updated_at": "2026-01-07 15:46:43.656+00",
+    "created_at": "2026-01-07 15:46:43.656+00"
+  },
+  {
+    "id": 51,
+    "title": "фантастика",
+    "title_en": "sci-fi",
+    "description": "Сюжеты о будущем, технологиях и научных открытиях.",
+    "generate_slug": false,
+    "slug": "sci-fi",
+    "updated_at": "2026-01-07 15:46:44.438+00",
+    "created_at": "2026-01-07 15:46:44.438+00"
+  },
+  {
+    "id": 52,
+    "title": "фильм-нуар",
+    "title_en": "film noir",
+    "description": "Мрачные и стильные истории с морально сложными персонажами.",
+    "generate_slug": false,
+    "slug": "film-noir",
+    "updated_at": "2026-01-07 15:46:45.227+00",
+    "created_at": "2026-01-07 15:46:45.227+00"
+  },
+  {
+    "id": 53,
+    "title": "фэнтези",
+    "title_en": "fantasy",
+    "description": "Миры магии, героев и необычных существ.",
+    "generate_slug": false,
+    "slug": "fantasy",
+    "updated_at": "2026-01-07 15:46:46.01+00",
+    "created_at": "2026-01-07 15:46:46.01+00"
+  },
+  {
+    "id": 54,
+    "title": "школа",
+    "title_en": "school",
+    "description": "Сюжеты о школьной жизни, учебе и дружбе.",
+    "generate_slug": false,
+    "slug": "school",
+    "updated_at": "2026-01-07 15:46:46.793+00",
+    "created_at": "2026-01-07 15:46:46.793+00"
+  },
+  {
+    "id": 55,
+    "title": "эротика",
+    "title_en": "erotica",
+    "description": "Истории с романтической и чувственной направленностью.",
+    "generate_slug": false,
+    "slug": "erotica",
+    "updated_at": "2026-01-07 15:46:47.841+00",
+    "created_at": "2026-01-07 15:46:47.841+00"
+  }
+]

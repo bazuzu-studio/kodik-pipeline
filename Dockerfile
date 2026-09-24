@@ -1,3 +1,4 @@
+```dockerfile
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -7,18 +8,27 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Python dependencies
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Application files
 COPY pipeline.py fetch_kodik.py genres.json ./
 COPY kodik_pipeline ./kodik_pipeline
 
-# data/ — том с kodik.json; unmapped_genres.json пишется в рабочую папку
+# Non-root user + persistent data directory
 RUN useradd --create-home --uid 1000 app \
     && mkdir -p /app/data \
     && chown -R app:app /app
+
 USER app
 
-# Пайплайн — batch-задача, не сервис. Контейнер остаётся «живым»,
-# а запуск делается через Dokploy Schedules / Terminal (см. README).
+# data/ предназначен для volume с kodik.json.
+# unmapped_genres.json и другие runtime-файлы также могут
+# сохраняться в /app/data.
+VOLUME ["/app/data"]
+
+# Batch-контейнер: не запускаем pipeline автоматически.
+# Запуск — через Dokploy Terminal / Schedule.
 CMD ["sleep", "infinity"]
+```

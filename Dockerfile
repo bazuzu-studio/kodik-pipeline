@@ -1,44 +1,39 @@
 FROM python:3.12-slim
 
-# Критические флаги для продакшена и предсказуемости
+# Флаги поведения Python и pip
+# LANG/LC_ALL — чтобы UTF-8 в названиях и логах не падал на codecpages
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    # Важно для корректной работы с UTF-8 в логах и файлах (особенно для аниме/кириллицы)
+    PIP_ROOT_USER_ACTION=ignore \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
 WORKDIR /app
 
-# Сначала копируем только requirements.txt, чтобы кэш слоя не инвалидировался при каждом изменении кода
+# requirements отдельно: код меняем часто, зависимости редко — слой установки не протухает
 COPY requirements.txt ./
+RUN python -m pip install --upgrade pip \
+ && pip install -r requirements.txt
 
-# Установка зависимостей с проверкой на ошибки
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install -r requirements.txt && \
-    rm -rf /root/.cache/pip
+# Сначала группа, потом пользователь: без groupadd useradd --gid 1000 падает
+RUN groupadd --gid 1000 app \
+ && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/app app \
+ && mkdir -p /app/data \
+ && chown -R app:app /app
 
-# Создаем пользователя и структуру папок ДО копирования файлов — это улучшает кэш слоев
-RUN useradd --create-home --uid 1000 --gid 1000 app && \
-    mkdir -p /app/data /app/kodik_pipeline && \
-    chown -R app:app /app
-
-# Копируем файлы уже под правами пользователя (или меняем права после — здесь делаем после копирования для простоты)
-COPY pipeline.py fetch_kodik.py genres.json ./
-COPY kodik_pipeline ./kodik_pipeline
-
-# Явно задаем владельца, если копирование было от root
-RUN chown -R app:app /app
+# --chown ставит владельца на этапе COPY — отдельный chown -R слоем больше не нужен
+COPY --chown=app:app pipeline.py fetch_kodik.py genres.json ./
+COPY --chown=app:app kodik_pipeline ./kodik_pipeline
 
 USER app
 
-# HEALTHCHECK: Dokploy и оркестраторы любят видеть, что контейнер «жив», даже если это batch-задача
-# Проверяем, что Python и скрипт существуют
+# Пайплайн — batch-задача, не сервис. Контейнер держим «живым»,
+# запуск делается через Dokploy Schedules / Terminal (см. README).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import os; assert os.path.exists('pipeline.py')" || exit 1
+    CMD python -c "import os, sys; sys.exit(0 if os.path.isfile('/app/pipeline.py') else 1)"
 
-# CMD теперь не просто sleep. Для batch-задач в Dokploy Schedules лучше оставить sleep infinity,
-# но добавить точку входа, которая позволит запускать скрипт вручную через exec без перезапуска контейнера.
-# Если Dokploy запускает задачу через команду — он переопределит CMD.
+STOPSIGNAL SIGTERM
+
 CMD ["sleep", "infinity"]

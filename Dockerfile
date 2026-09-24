@@ -1,4 +1,4 @@
-```dockerfile
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -35,4 +35,4 @@ VOLUME ["/app/data"]
 # Batch container.
 # Pipeline запускается через Dokploy Terminal / Schedule.
 CMD ["sleep", "infinity"]
-```
+

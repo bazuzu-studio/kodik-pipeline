@@ -4,10 +4,11 @@ Kodik отдаёт его в material_data.anime_status (аниме) или
 material_data.all_status (остальные сериалы). Это НЕ content.status —
 тот служебный (draft/published) и принадлежит Payload.
 
-Для хранения нужна колонка в content (по умолчанию `release_status`,
-имя можно поменять через RELEASE_STATUS_COLUMN) и, опционально,
-`version_<имя>` в _content_v. Если колонок нет — пайплайн работает как
-раньше и просто не пишет статус.
+Хранится в content.release_status (поле releaseStatus в CMS, enum
+anons/ongoing/released; имя колонки можно поменять через
+RELEASE_STATUS_COLUMN) и в _content_v.version_release_status. Колонки
+создаёт миграция CMS. Если их нет — пайплайн работает как раньше и просто
+не пишет статус.
 """
 from __future__ import annotations
 
@@ -25,18 +26,24 @@ ANONS = "anons"
 _ALIASES = {
     ONGOING: {"ongoing", "онгоинг", "выходит"},
     RELEASED: {"released", "вышел", "вышло", "завершён", "завершен"},
-    ANONS: {"anons", "anons ", "announced", "анонс"},
+    ANONS: {"anons", "announced", "анонс"},
 }
 _LOOKUP = {alias: canon for canon, aliases in _ALIASES.items() for alias in aliases}
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
+KNOWN_STATUSES = frozenset({ONGOING, RELEASED, ANONS})
+
+
 def normalize_status(value: Any) -> str | None:
-    """Приводит статус Kodik к ongoing/released/anons; неизвестное -> как есть."""
+    """Приводит статус Kodik к ongoing / released / anons.
+
+    Неизвестное значение -> None: колонка в CMS — enum из этих трёх
+    значений, и любое другое значение уронило бы запись целиком.
+    """
     if value in (None, ""):
         return None
-    raw = str(value).strip().casefold()
-    return _LOOKUP.get(raw, raw or None)
+    return _LOOKUP.get(str(value).strip().casefold())
 
 
 def is_ongoing(value: Any) -> bool:
@@ -74,7 +81,7 @@ def detect_status_support(cur) -> StatusSupport:
 
 def set_release_status(cur, content_id: int, status: str | None, support: StatusSupport) -> bool:
     """Пишет статус в content (+ версии). True, если значение в content изменилось."""
-    if not status or not support.content:
+    if status not in KNOWN_STATUSES or not support.content:
         return False
     # Имена колонок проверены регуляркой в status_column() — интерполяция безопасна.
     cur.execute(

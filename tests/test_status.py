@@ -7,6 +7,7 @@ from kodik_pipeline.status import is_ongoing, normalize_status, status_column
     ("ongoing", "ongoing"), ("Ongoing", "ongoing"), ("выходит", "ongoing"), ("онгоинг", "ongoing"),
     ("released", "released"), ("вышел", "released"),
     ("anons", "anons"), (None, None), ("", None), ("  ", None),
+    ("какой-то новый статус", None),  # вне enum CMS -> не пишем
 ])
 def test_normalize_status(raw, expected):
     assert normalize_status(raw) == expected

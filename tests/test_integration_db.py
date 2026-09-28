@@ -1,8 +1,10 @@
 """Интеграционные тесты на реальном Postgres.
 
 Запуск:  TEST_DATABASE_URL=postgres://user@host:5432/db pytest tests/test_integration_db.py
-Нужна БД со схемой Payload (content, _content_v, seasons, episodes, genres...).
+Нужна тестовая БД, в которой применены миграции CMS (`pnpm payload migrate`),
+включая колонки release_status / version_release_status (enum).
 Без TEST_DATABASE_URL тесты пропускаются. Таблицы ОЧИЩАЮТСЯ — используйте тестовую БД!
+Схему тесты не меняют.
 """
 import argparse
 import os
@@ -37,8 +39,11 @@ def db(monkeypatch, tmp_path):
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute("TRUNCATE episodes, seasons, _content_v_rels, _content_v, content_rels, content, genres RESTART IDENTITY CASCADE")
-    cur.execute("ALTER TABLE content DROP COLUMN IF EXISTS release_status")
-    cur.execute("ALTER TABLE _content_v DROP COLUMN IF EXISTS version_release_status")
+    cur.execute("""SELECT count(*) FROM information_schema.columns
+                   WHERE table_name IN ('content', '_content_v')
+                     AND column_name IN ('release_status', 'version_release_status')""")
+    if cur.fetchone()[0] != 2:
+        pytest.skip("в тестовой БД нет колонок release_status — примените миграции CMS")
     yield cur
     conn.close()
 
@@ -95,8 +100,6 @@ def test_dry_run_rolls_back(db, monkeypatch, tmp_path):
 
 
 def test_status_saved_and_finished_title_rechecked(db, monkeypatch, tmp_path):
-    db.execute("ALTER TABLE content ADD COLUMN release_status varchar")
-    db.execute("ALTER TABLE _content_v ADD COLUMN version_release_status varchar")
     import_catalog(monkeypatch, tmp_path, [serial("serial-1", 2020, [1, 2]),
                                            serial("serial-2", 2022, [1])])
     db.execute("SELECT title_en, release_status FROM content ORDER BY id")
@@ -116,6 +119,28 @@ def test_status_saved_and_finished_title_rechecked(db, monkeypatch, tmp_path):
     db.execute("SELECT DISTINCT version_release_status FROM _content_v WHERE version_title_en='Show'")
     assert db.fetchall() == [("released",)]
     assert len(episodes_of(db, "Show")) == 3
+
+
+def test_works_without_status_column(db, monkeypatch, tmp_path):
+    """Если колонки статуса нет (другое имя) — серии обновляются, статус не пишется."""
+    monkeypatch.setenv("RELEASE_STATUS_COLUMN", "no_such_column")
+    import_catalog(monkeypatch, tmp_path, [serial("serial-2", 2022, [1])])
+    monkeypatch.setattr(api, "fetch_ongoing",
+                        lambda **_: [api.normalize_item(serial("serial-2", 2022, [1, 2]))])
+    monkeypatch.setattr(api, "fetch_by_kodik_id",
+                        lambda *a, **k: pytest.fail("перепроверка без колонки статуса не нужна"))
+    ongoing.run(ongoing_args())
+    assert len(episodes_of(db, "Show")) == 2
+    db.execute("SELECT release_status FROM content")
+    assert db.fetchall() == [(None,)]
+
+
+def test_unknown_status_value_does_not_break_enum_column(db, monkeypatch, tmp_path):
+    """Kodik может прислать статус вне anons/ongoing/released — запись не должна падать."""
+    item = serial("serial-2", 2022, [1], status="какой-то новый статус")
+    import_catalog(monkeypatch, tmp_path, [item])
+    db.execute("SELECT count(*), max(release_status::text) FROM content")
+    assert db.fetchone() == (1, None)
 
 
 def test_empty_ongoing_list_leaves_db_untouched(db, monkeypatch, tmp_path):

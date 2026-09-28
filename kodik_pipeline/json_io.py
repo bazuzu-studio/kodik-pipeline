@@ -1,15 +1,17 @@
 """
 Чтение/запись JSON с понятными сообщениями об ошибках.
 
-Важно: дампы Kodik (movies.json, series.json) и base.json — это большие
-файлы, которые легко случайно обрезать при экспорте/копировании. Обычный
-json.JSONDecodeError не говорит явно "файл обрезан", поэтому здесь мы
-проверяем это отдельно и подсказываем, что делать.
+Дамп data/kodik.json — большой файл, который легко обрезать при
+копировании или прерванной записи. Обычный json.JSONDecodeError не говорит
+явно "файл обрезан", поэтому здесь это проверяется отдельно. Запись
+атомарная (tmp + rename), чтобы упавший fetch не оставил битый файл.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from typing import Any, Iterator
 
 
@@ -40,13 +42,25 @@ def load_json(path: str) -> Any:
 
 
 def save_json(path: str, data: Any) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """Атомарная запись: пишем во временный файл рядом и делаем os.replace."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def iter_json_array(path: str) -> Iterator[dict[str, Any]]:
     """Потоковое чтение большого JSON-массива объектов (ijson), чтобы не
-    держать в памяти весь дамп movies.json / series.json целиком."""
+    держать в памяти весь дамп целиком."""
     import ijson
 
     try:
@@ -57,5 +71,5 @@ def iter_json_array(path: str) -> Iterator[dict[str, Any]]:
     except ijson.JSONError as e:
         raise SystemExit(
             f"Ошибка: файл {path} повреждён или обрезан на середине "
-            f"записи — переэкспортируйте исходные данные ({e})."
+            f"записи — перезапустите fetch ({e})."
         ) from e

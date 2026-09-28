@@ -8,8 +8,9 @@ Kodik API client.
 - читать token/translation_id из .env;
 - ходить страницами;
 - повторять запросы при 429/5xx/сетевых ошибках;
-- сохранять сырой ответ в JSON для отладки/кэша;
-- превращать ответ API в формат, который уже понимает загрузчик Payload.
+- превращать ответ API в формат, который уже понимает загрузчик Payload;
+- выбирать только онгоинги (fetch_ongoing) и добирать отдельные записи
+  по Kodik ID (fetch_by_kodik_id) для команды update-ongoing.
 """
 
 from __future__ import annotations
@@ -25,9 +26,17 @@ from typing import Any, Iterator
 from .config import (
     kodik_delay, kodik_limit, kodik_retries, kodik_timeout, require_env,
 )
+from .status import is_ongoing, normalize_status
 from .text_utils import slugify
 
 API_URL = "https://kodik-api.com/list"
+SEARCH_URL = "https://kodik-api.com/search"
+
+# Kodik фильтрует статус разными полями: anime_status — аниме,
+# all_status — остальные сериалы. Запрашиваем оба и дополнительно
+# фильтруем на клиенте (если сервер проигнорирует параметр).
+ONGOING_FILTER_FIELDS = ("anime_status", "all_status")
+USER_AGENT = "kodik-pipeline/2.2"
 
 
 def _request_url(url: str, timeout: int | None = None, retries: int | None = None) -> dict[str, Any]:
@@ -39,7 +48,7 @@ def _request_url(url: str, timeout: int | None = None, retries: int | None = Non
         try:
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "kodik-pipeline/2.1", "Accept": "application/json"},
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -88,8 +97,11 @@ def iter_items(
     limit: int | None = None,
     delay: float | None = None,
     max_pages: int | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Потоково отдаёт все results из /list.
+
+    extra_params — дополнительные фильтры Kodik (например anime_status).
 
     ВАЖНО: Kodik /list не использует параметр `page` для пагинации.
     После первой страницы API возвращает URL следующей страницы в поле `next`;
@@ -111,6 +123,9 @@ def iter_items(
         "translation_id": translation_id,
         "limit": limit,
     }
+    for key, value in (extra_params or {}).items():
+        if value is not None:
+            params[key] = value
     url: str | None = API_URL + "?" + urllib.parse.urlencode(params)
     page_number = 0
     seen_ids: set[str] = set()
@@ -273,11 +288,10 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         "imdbId": item.get("imdb_id") or md.get("imdb_id"),
         "genres": _pick_genres(md),
         "screenshots": md.get("screenshots") or item.get("screenshots") or [],
-        # Ниже — поля из material_data. Все, кроме minimalAge, пока
-        # используются только внутри normalize_item и не пишутся в БД
-        # (load.py их не читает); minimalAge с этого шага сохраняется
-        # в content.minimal_age / _content_v.version_minimal_age.
-        "status": md.get("anime_status") or md.get("all_status"),
+        # Ниже — поля из material_data. В БД пишутся minimalAge (age_rating)
+        # и status (release_status, если такая колонка есть — см. status.py);
+        # остальные пока используются только внутри пайплайна.
+        "status": normalize_status(md.get("anime_status") or md.get("all_status")),
         "episodesTotal": md.get("episodes_total"),
         "episodesAired": md.get("episodes_aired"),
         "minimalAge": md.get("minimal_age"),
@@ -326,8 +340,8 @@ def fetch_normalized(
     *,
     token: str | None = None,
     translation_id: int | str | None = None,
-    limit: int = 100,
-    delay: float = 0.25,
+    limit: int | None = None,
+    delay: float | None = None,
     max_pages: int | None = None,
 ) -> list[dict[str, Any]]:
     records = [normalize_item(item) for item in iter_items(
@@ -409,3 +423,63 @@ def fetch_normalized(
             rec["slug"] = f"{rec['slug']}-{count}"
 
     return grouped
+
+
+def fetch_ongoing(
+    *,
+    token: str | None = None,
+    translation_id: int | str | None = None,
+    limit: int | None = None,
+    delay: float | None = None,
+    max_pages: int | None = None,
+) -> list[dict[str, Any]]:
+    """Все сериалы со статусом ongoing (с сезонами и ссылками на серии).
+
+    Франшизы здесь НЕ группируются: у записи остаётся kodikId, по которому
+    update-ongoing находит уже загруженный content. Фильтр по статусу
+    дублируется на клиенте, поэтому лишние записи не попадут в результат,
+    даже если Kodik проигнорирует серверный фильтр.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for field in ONGOING_FILTER_FIELDS:
+        print(f"Онгоинги: запрос с {field}=ongoing")
+        for item in iter_items(
+            token=token,
+            translation_id=translation_id,
+            limit=limit,
+            delay=delay,
+            max_pages=max_pages,
+            extra_params={field: "ongoing"},
+        ):
+            rec = normalize_item(item)
+            if rec.get("type") != "series" or not is_ongoing(rec.get("status")):
+                continue
+            key = str(rec.get("kodikId") or "")
+            if key:
+                found.setdefault(key, rec)
+    return list(found.values())
+
+
+def fetch_by_kodik_id(
+    kodik_id: str,
+    *,
+    token: str | None = None,
+) -> dict[str, Any] | None:
+    """Одна запись по Kodik ID через /search (или None, если не найдена).
+
+    Нужна, чтобы узнать актуальный статус тайтла, который пропал из списка
+    онгоингов (обычно — сериал завершился).
+    """
+    token = token or require_env("KODIK_TOKEN")
+    params = {
+        "token": token,
+        "id": kodik_id,
+        "with_episodes": "true",
+        "with_material_data": "true",
+        "limit": 5,
+    }
+    payload = _request_url(f"{SEARCH_URL}?{urllib.parse.urlencode(params)}")
+    for item in payload.get("results") or []:
+        if isinstance(item, dict) and str(item.get("id")) == str(kodik_id):
+            return normalize_item(item)
+    return None

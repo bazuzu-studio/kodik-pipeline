@@ -24,6 +24,8 @@ services:
       KODIK_DELAY: ${KODIK_DELAY:-0.25}
       KODIK_TIMEOUT: ${KODIK_TIMEOUT:-60}
       KODIK_RETRIES: ${KODIK_RETRIES:-5}
+
+      RELEASE_STATUS_COLUMN: ${RELEASE_STATUS_COLUMN:-release_status}
     volumes:
       - kodik_data:/app/data
     networks:

@@ -1,14 +1,10 @@
 """
 Канонический список жанров (genres.json) — единственный источник правды.
 
-merge_kodik_sources.py использует его, чтобы отфильтровать "сырые" жанры
-Kodik и оставить только те, что есть в каноническом списке.
-load_to_postgres.py использует его, чтобы синхронизировать таблицу genres
-в БД (upsert с сохранением id, удаление устаревших записей).
-
-Раньше обе логики были продублированы (в merge_kodik_sources.py — простая
-загрузка в dict, в load_to_postgres.py — полноценный upsert в БД) — здесь
-они собраны в одном месте.
+sync_genres_table синхронизирует таблицу genres с файлом (upsert с
+сохранением id, удаление устаревших записей). get_or_create_genre
+сопоставляет жанры Kodik без учёта регистра, а неизвестные создаёт как
+fallback и логирует.
 """
 
 from __future__ import annotations
@@ -88,8 +84,8 @@ def load_canonical_genres(path: str) -> list[dict[str, Any]]:
 
 def title_index(genres: list[dict[str, Any]]) -> dict[str, str]:
     """{название в нижнем регистре: оригинальное название}.
-    Используется merge_kodik_sources.py для регистронезависимого
-    сопоставления жанров Kodik с каноническим списком."""
+    Для регистронезависимого сопоставления жанров Kodik
+    с каноническим списком."""
     return {g["title"].casefold(): g["title"] for g in genres}
 
 
@@ -138,8 +134,7 @@ def get_or_create_genre(
 ) -> int:
     """id жанра по каноническому индексу; если жанра нет — создаёт как
     fallback и добавляет в unmapped_genres для итогового отчёта."""
-    canonical_title = genre_index.get(title.casefold())
-    genre_id = canonical_title
+    genre_id = genre_index.get(title.casefold())
     if genre_id is not None:
         return genre_id
 

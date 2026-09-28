@@ -2,24 +2,19 @@
 Шаг 2: загрузка data/kodik.json в таблицы Payload.
 
 Особенности:
-  - episodes.player_link — ссылка на плеер для СЕРИЙ (колонка player_link
-    в таблице episodes, поле playerLink в Payload у Episode). Пишется
-    всегда напрямую, без fallback.
-  - content.player_link — ссылка на плеер для ФИЛЬМОВ (колонка player_link
-    в таблице content, поле playerLink у Content с условием
-    data?.type === 'movie'). Источник: Kodik item.link (см.
-    api.normalize_item, только для type === "movie").
-  - content.age_rating — возрастное ограничение (поле minimalAge в Payload).
-    Источник: Kodik API → material_data.age_rating (см. api.normalize_item).
-  - content.status / _status — служебные поля статуса записи в Payload
-    (черновик/опубликовано), не путать с анимешным статусом (онгоинг/вышел),
-    который Kodik отдаёт в material_data.anime_status. Анимешный статус
-    сейчас не сохраняется — есть только в normalize_item как rec["status"].
-  - episodesTotal/episodesAired (rec) — тоже берутся из material_data,
-    но пока не пишутся ни в одну таблицу; при необходимости добавляются
-    по той же схеме, что и age_rating ниже.
+  - episodes.player_link — ссылка на плеер для СЕРИЙ. Пишется напрямую.
+  - content.player_link — ссылка на плеер для ФИЛЬМОВ (Kodik item.link).
+  - content.age_rating — возрастное ограничение (minimalAge из material_data).
+  - content.release_status — статус выхода (ongoing/released/anons) из
+    material_data.anime_status / all_status. Пишется, только если такая
+    колонка есть (см. status.py); не путать со служебными content.status /
+    _status (draft/published).
+  - Каждая запись грузится в своём SAVEPOINT: битая запись пропускается и
+    попадает в отчёт, остальные сохраняются. При ошибках код возврата = 1.
+  - Пока идёт загрузка, удерживается advisory-lock, поэтому update-ongoing
+    в это время не запустится (и наоборот).
 
-Запуск: python pipeline.py load data/kodik.json genres.json
+Запуск: python pipeline.py load --data data/kodik.json --genres genres.json
 """
 
 from __future__ import annotations
@@ -31,9 +26,10 @@ import psycopg2.extras
 
 from . import genres as genres_mod
 from .config import database_url
-from .db import table_columns, transaction
+from .db import table_columns, transaction, try_advisory_lock
 from .json_io import load_json, save_json
 from .richtext import build_richtext
+from .status import StatusSupport, detect_status_support, set_release_status
 
 # ─── SQL: content ───────────────────────────────────────────────
 
@@ -213,6 +209,21 @@ def insert_version_rels(cur, version_id: int, genre_ids: list[int]) -> None:
 
 # ─── Функции: сезоны и эпизоды ───────────────────────────────────
 
+def insert_episode(cur, season_id: int, ep_number: int, kodik_link: str | None) -> None:
+    """Создаёт новую серию (без проверки на существование)."""
+    insert_fields: dict[str, Any] = {
+        "season_id": season_id,
+        "episode_number": ep_number,
+        "title": f"Серия {ep_number}",
+    }
+    if kodik_link:
+        insert_fields["player_link"] = kodik_link
+
+    col_names = ", ".join(insert_fields)
+    placeholders = ", ".join(f"%({c})s" for c in insert_fields)
+    cur.execute(f"INSERT INTO episodes ({col_names}) VALUES ({placeholders})", insert_fields)
+
+
 def upsert_episode(cur, season_id: int, ep_number: int, kodik_link: str | None) -> bool:
     """Создаёт эпизод или обновляет ссылку у уже существующего.
     Возвращает True, если эпизод был СОЗДАН (для счётчика).
@@ -231,17 +242,7 @@ def upsert_episode(cur, season_id: int, ep_number: int, kodik_link: str | None) 
             )
         return False
 
-    insert_fields: dict[str, Any] = {
-        "season_id": season_id,
-        "episode_number": ep_number,
-        "title": f"Серия {ep_number}",
-    }
-    if kodik_link:
-        insert_fields["player_link"] = kodik_link
-
-    col_names = ", ".join(insert_fields)
-    placeholders = ", ".join(f"%({c})s" for c in insert_fields)
-    cur.execute(f"INSERT INTO episodes ({col_names}) VALUES ({placeholders})", insert_fields)
+    insert_episode(cur, season_id, ep_number, kodik_link)
     return True
 
 
@@ -360,14 +361,16 @@ def load_record(
     rec: dict[str, Any],
     genre_index: dict[str, int],
     unmapped_genres: list[str],
+    status_support: StatusSupport | None = None,
 ) -> tuple[int, int]:
     """Загружает одну запись из data/kodik.json.
 
     Поля content, приходящие из Kodik material_data (см. api.normalize_item):
       - rating       ← material_data.shikimori_rating
       - age_rating  ← material_data.age_rating
-    status/_status здесь не связаны с material_data — это служебные поля
-    Payload ('draft'/'published'), выставляются константой при каждой загрузке.
+    status/_status — служебные поля Payload ('draft'/'published'),
+    выставляются константой. Статус выхода (ongoing/released) пишется
+    отдельно в release_status, если колонка существует.
 
     Возвращает (новых_сезонов, новых_эпизодов) — 0, 0 для фильмов.
     """
@@ -429,6 +432,10 @@ def load_record(
     insert_version_rels(cur, published_version_id, genre_ids)
     insert_version_rels(cur, draft_version_id, genre_ids)
 
+    # Статус выхода — после пересоздания версий, чтобы попал и в них.
+    if status_support is not None:
+        set_release_status(cur, content_id, rec.get("status"), status_support)
+
     # Сезоны и эпизоды (только для series)
     seasons_count = 0
     episodes_count = 0
@@ -454,16 +461,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     records = load_json(args.merged)
+    if not isinstance(records, list):
+        raise SystemExit(f"Ошибка: {args.merged} должен содержать JSON-массив записей")
 
     inserted = 0
     skipped_no_type = 0
     total_seasons = 0
     total_episodes = 0
     unmapped_genres: list[str] = []
+    failed: list[str] = []
 
     with transaction(database_url()) as conn:
         with conn.cursor() as cur:
+            if not try_advisory_lock(cur):
+                raise SystemExit("Другая задача пайплайна уже пишет в БД — запуск пропущен.")
+
             require_content_columns(cur)
+            status_support = detect_status_support(cur)
+            if not status_support.content:
+                print(
+                    f"Примечание: колонки content.{status_support.column} нет — "
+                    "статус выхода (ongoing/released) не сохраняется."
+                )
 
             if args.genres:
                 genre_index = genres_mod.sync_genres_table(cur, args.genres)
@@ -475,7 +494,25 @@ def main(argv: list[str] | None = None) -> None:
                     skipped_no_type += 1
                     continue
 
-                s_count, ep_count = load_record(cur, rec, genre_index, unmapped_genres)
+                # SAVEPOINT на запись: одна битая запись не откатывает весь импорт.
+                index_snapshot = dict(genre_index)
+                unmapped_len = len(unmapped_genres)
+                cur.execute("SAVEPOINT rec")
+                try:
+                    s_count, ep_count = load_record(
+                        cur, rec, genre_index, unmapped_genres, status_support
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    cur.execute("ROLLBACK TO SAVEPOINT rec")
+                    genre_index.clear()
+                    genre_index.update(index_snapshot)
+                    del unmapped_genres[unmapped_len:]
+                    label = rec.get("titleEn") or rec.get("kodikId") or f"#{idx}"
+                    failed.append(f"{label}: {exc}")
+                    print(f"  [ERR] {label}: {exc}")
+                    continue
+                cur.execute("RELEASE SAVEPOINT rec")
+
                 inserted += 1
                 total_seasons += s_count
                 total_episodes += ep_count
@@ -486,19 +523,23 @@ def main(argv: list[str] | None = None) -> None:
     print("\n--- Сводка ---")
     print(f"Вставлено/обновлено записей content: {inserted}")
     print(f"Пропущено (не определён type): {skipped_no_type}")
+    print(f"Ошибок: {len(failed)}")
     print(f"Сезонов создано: {total_seasons}")
     print(f"Эпизодов создано: {total_episodes}")
 
     if unmapped_genres:
         unique = sorted(set(unmapped_genres))
-        print(f"\n⚠ ВНИМАНИЕ: жанры из data/kodik.json отсутствуют в genres.json ({len(unique)} шт.):")
+        print(f"\n⚠ ВНИМАНИЕ: жанры из {args.merged} отсутствуют в genres.json ({len(unique)} шт.):")
         print("Созданы как fallback. Проверьте genres.json — возможно, список нужно дополнить:")
         for g in unique:
             print(f"  ! {g}")
         save_json("unmapped_genres.json", unique)
         print("Список сохранён в unmapped_genres.json")
     else:
-        print("Все жанры из data/kodik.json найдены в genres.json — расхождений нет.")
+        print(f"Все жанры из {args.merged} найдены в справочнике — расхождений нет.")
+
+    if failed:
+        raise SystemExit(f"Импорт завершён с ошибками ({len(failed)} записей пропущено).")
 
 
 if __name__ == "__main__":

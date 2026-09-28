@@ -10,6 +10,7 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         params = params or {}
+        sql = sql.strip()
         self.queries.append((sql, params))
         if sql.startswith("SELECT id FROM episodes"):
             self.pending = self.rows.get((params["season_id"], params["episode_number"]))

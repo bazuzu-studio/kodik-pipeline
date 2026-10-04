@@ -181,13 +181,15 @@ def _pick_genres(md: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for item in raw:
         if isinstance(item, str):
-            title = item.strip()
+            title = item
         elif isinstance(item, dict):
-            title = str(item.get("title") or item.get("name") or "").strip()
+            title = str(item.get("title") or item.get("name") or "")
         else:
             continue
-        if title and title.casefold() not in seen:
-            seen.add(title.casefold())
+        # В нижнем регистре и без повторов: «Экшен» и «экшен» — один жанр.
+        title = " ".join(title.split()).casefold()
+        if title and title not in seen:
+            seen.add(title)
             result.append(title)
     return result
 

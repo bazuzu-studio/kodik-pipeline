@@ -22,7 +22,7 @@ def test_normalize_series_extracts_episode_links():
     result = normalize_item(item)
     assert result["type"] == "series"
     assert result["rating"] == 8.3
-    assert result["genres"] == ["Экшен"]
+    assert result["genres"] == ["экшен"]
     assert [e["number"] for e in result["seasons"][0]["episodes"]] == [1, 10]
     assert result["seasons"][0]["episodes"][0]["playerLink"] == "link1"
 

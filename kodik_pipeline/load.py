@@ -33,6 +33,13 @@ from .status import StatusSupport, detect_status_support, set_release_status
 
 # ─── SQL: content ───────────────────────────────────────────────
 
+# content.title_en в схеме Payload НЕ имеет уникального индекса, поэтому
+# ``INSERT ... ON CONFLICT (title_en)`` падает с «there is no unique or
+# exclusion constraint matching the ON CONFLICT specification». Вместо него —
+# явный поиск существующей записи (find_content_id) и INSERT либо UPDATE.
+FIND_CONTENT_BY_TITLE_SQL = "SELECT id FROM content WHERE title_en = %s ORDER BY id LIMIT 1"
+FIND_CONTENT_BY_KODIK_ID_SQL = "SELECT id FROM content WHERE kodik_id = %s ORDER BY id LIMIT 1"
+
 INSERT_CONTENT_SQL = """
 INSERT INTO content (
     type, title_en, title_ru, original_title, slug,
@@ -42,25 +49,32 @@ INSERT INTO content (
 ) VALUES (
     %(type)s, %(title_en)s, %(title_ru)s, %(original_title)s, %(slug)s,
     %(description)s, %(release_year)s, %(duration)s, %(rating)s, %(age_rating)s,
-    %(player_link)s, 'draft', 'published', %(shikimori_id)s, %(kodik_id)s, %(kinopoisk_id)s,
+    %(player_link)s, 'published', 'published', %(shikimori_id)s, %(kodik_id)s, %(kinopoisk_id)s,
     COALESCE(%(created_at)s::timestamptz, now()), COALESCE(%(updated_at)s::timestamptz, now())
 )
-ON CONFLICT (title_en) DO UPDATE SET
-    title_ru = EXCLUDED.title_ru,
-    original_title = EXCLUDED.original_title,
-    slug = EXCLUDED.slug,
-    description = EXCLUDED.description,
-    release_year = EXCLUDED.release_year,
-    duration = EXCLUDED.duration,
-    rating = EXCLUDED.rating,
-    age_rating = EXCLUDED.age_rating,
-    player_link = EXCLUDED.player_link,
-    shikimori_id = EXCLUDED.shikimori_id,
-    kodik_id = EXCLUDED.kodik_id,
-    kinopoisk_id = EXCLUDED.kinopoisk_id,
-    created_at = COALESCE(EXCLUDED.created_at, content.created_at),
-    updated_at = COALESCE(EXCLUDED.updated_at, content.updated_at),
+RETURNING id;
+"""
+
+UPDATE_CONTENT_SQL = """
+UPDATE content SET
+    title_en = %(title_en)s,
+    title_ru = %(title_ru)s,
+    original_title = %(original_title)s,
+    slug = %(slug)s,
+    description = %(description)s,
+    release_year = %(release_year)s,
+    duration = %(duration)s,
+    rating = %(rating)s,
+    age_rating = %(age_rating)s,
+    player_link = %(player_link)s,
+    shikimori_id = %(shikimori_id)s,
+    kodik_id = %(kodik_id)s,
+    kinopoisk_id = %(kinopoisk_id)s,
+    created_at = COALESCE(created_at, %(created_at)s::timestamptz, now()),
+    updated_at = COALESCE(%(updated_at)s::timestamptz, now()),
+    status = 'published',
     _status = 'published'
+WHERE id = %(id)s
 RETURNING id;
 """
 
@@ -98,7 +112,7 @@ INSERT INTO _content_v ({_VERSION_COLUMNS}) VALUES (
     %(original_title)s, %(slug)s, %(description)s,
     %(release_year)s, %(duration)s, %(rating)s, %(age_rating)s,
     %(player_link)s,
-    'draft', 'published', %(shikimori_id)s, %(kodik_id)s,
+    'published', 'published', %(shikimori_id)s, %(kodik_id)s,
     COALESCE(%(updated_at)s::timestamptz, now()),
     COALESCE(%(created_at)s::timestamptz, now()),
     true
@@ -112,7 +126,7 @@ INSERT INTO _content_v ({_VERSION_COLUMNS}) VALUES (
     %(original_title)s, %(slug)s, %(description)s,
     %(release_year)s, %(duration)s, %(rating)s, %(age_rating)s,
     %(player_link)s,
-    'draft', 'draft', %(shikimori_id)s, %(kodik_id)s,
+    'published', 'draft', %(shikimori_id)s, %(kodik_id)s,
     COALESCE(%(updated_at)s::timestamptz, now()),
     COALESCE(%(created_at)s::timestamptz, now()),
     false
@@ -195,6 +209,36 @@ def require_content_columns(cur) -> None:
             "Выполните перед запуском:\n"
             "  ALTER TABLE episodes ADD COLUMN IF NOT EXISTS player_link TEXT;\n"
         )
+
+
+# ─── Публикация всего контента ──────────────────────────────────
+
+def publish_all_content(cur) -> int:
+    """Выставляет status = 'published' и _status = 'published' у ВСЕГО контента
+    (в том числе загруженного раньше), а в версиях — version_status = 'published'.
+    Возвращает число изменённых записей content."""
+    cur.execute(
+        """
+        UPDATE content SET status = 'published', _status = 'published'
+        WHERE status IS DISTINCT FROM 'published' OR _status IS DISTINCT FROM 'published'
+        """
+    )
+    changed = cur.rowcount
+    cur.execute(
+        """
+        UPDATE _content_v SET version_status = 'published'
+        WHERE version_status IS DISTINCT FROM 'published'
+        """
+    )
+    cur.execute(
+        """
+        UPDATE _content_v SET version__status = 'published'
+        WHERE latest = true AND version__status IS DISTINCT FROM 'published'
+        """
+    )
+    if changed:
+        print(f"Переведено в «Опубликовано» ранее загруженных записей: {changed}")
+    return changed
 
 
 # ─── Функции: версии и реляции ───────────────────────────────────
@@ -291,24 +335,38 @@ def load_seasons_and_episodes(
 
 # ─── Защита от конфликтов slug ───────────────────────────────────
 
-def resolve_content_slug(cur, rec: dict[str, Any]) -> str:
+def find_content_id(cur, rec: dict[str, Any]) -> int | None:
+    """id уже загруженной записи: сначала по title_en (рабочий ключ
+    пайплайна, по нему же ищет постеры), затем по kodik_id."""
+    cur.execute(FIND_CONTENT_BY_TITLE_SQL, (rec["titleEn"],))
+    row = cur.fetchone()
+    if row:
+        return row[0]
+
+    kodik_id = rec.get("kodikId")
+    if kodik_id not in (None, ""):
+        cur.execute(FIND_CONTENT_BY_KODIK_ID_SQL, (str(kodik_id),))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    return None
+
+
+def resolve_content_slug(cur, rec: dict[str, Any], content_id: int | None = None) -> str:
     """Возвращает безопасный slug для content.
 
-    Если запись с таким title_en уже существует — сохраняем её текущий slug.
+    Если запись уже существует — сохраняем её текущий slug.
     Если slug занят другой записью — добавляем kodikId (или shikimoriId).
     Это предотвращает UniqueViolation по content_slug_idx.
     """
-    title_en = rec["titleEn"]
     requested_slug = (rec.get("slug") or "").strip()
 
     # При повторной загрузке существующей записи не меняем её slug.
-    cur.execute(
-        "SELECT slug FROM content WHERE title_en = %s LIMIT 1",
-        (title_en,),
-    )
-    existing = cur.fetchone()
-    if existing and existing[0]:
-        return existing[0]
+    if content_id is not None:
+        cur.execute("SELECT slug FROM content WHERE id = %s", (content_id,))
+        existing = cur.fetchone()
+        if existing and existing[0]:
+            return existing[0]
 
     if not requested_slug:
         requested_slug = "content"
@@ -362,26 +420,28 @@ def load_record(
     genre_index: dict[str, int],
     unmapped_genres: list[str],
     status_support: StatusSupport | None = None,
+    keep_version_poster: bool = False,
 ) -> tuple[int, int]:
     """Загружает одну запись из data/kodik.json.
 
     Поля content, приходящие из Kodik material_data (см. api.normalize_item):
       - rating       ← material_data.shikimori_rating
       - age_rating  ← material_data.age_rating
-    status/_status — служебные поля Payload ('draft'/'published'),
-    выставляются константой. Статус выхода (ongoing/released) пишется
+    status/_status — Опубликовано: оба поля выставляются в 'published'
+    (status — устаревшее служебное поле Payload, видимость задаёт _status). Статус выхода (ongoing/released) пишется
     отдельно в release_status, если колонка существует.
 
     Возвращает (новых_сезонов, новых_эпизодов) — 0, 0 для фильмов.
     """
     richtext = build_richtext(rec.get("description"))
+    content_id = find_content_id(cur, rec)
 
     params = {
         "type": rec["type"],
         "title_en": rec["titleEn"],
         "title_ru": rec.get("titleRu") or rec["titleEn"],
         "original_title": rec.get("originalTitle"),
-        "slug": resolve_content_slug(cur, rec),
+        "slug": resolve_content_slug(cur, rec, content_id),
         "description": psycopg2.extras.Json(richtext),
         "release_year": rec.get("releaseYear"),
         "duration": rec.get("duration"),
@@ -393,13 +453,16 @@ def load_record(
         # ссылка на плеер хранится по эпизодам в таблице episodes.
         "player_link": rec.get("playerLink"),
         "shikimori_id": rec.get("shikimoriId"),
-        "kodik_id": rec.get("kodikId"),
+        "kodik_id": str(rec["kodikId"]) if rec.get("kodikId") not in (None, "") else None,
         "kinopoisk_id": rec.get("kinopoiskId"),
         "created_at": rec.get("createdAt"),
         "updated_at": rec.get("updatedAt"),
     }
 
-    cur.execute(INSERT_CONTENT_SQL, params)
+    if content_id is None:
+        cur.execute(INSERT_CONTENT_SQL, params)
+    else:
+        cur.execute(UPDATE_CONTENT_SQL, {**params, "id": content_id})
     content_id = cur.fetchone()[0]
 
     # Очистка старых реляций и версий
@@ -408,11 +471,13 @@ def load_record(
     cur.execute(DELETE_OLD_VERSIONS_SQL, {"id": content_id})
 
     # Жанры
+    # Названия приводятся к нижнему регистру, пустые и повторы отбрасываются —
+    # у контента не бывает двух одинаковых жанров.
     genre_ids: list[int] = []
-    for genre_title in rec.get("genres", []):
-        genre_ids.append(
-            genres_mod.get_or_create_genre(cur, genre_index, genre_title, unmapped_genres)
-        )
+    for genre_title in genres_mod.unique_genre_titles(rec.get("genres")):
+        genre_id = genres_mod.get_or_create_genre(cur, genre_index, genre_title, unmapped_genres)
+        if genre_id not in genre_ids:
+            genre_ids.append(genre_id)
 
     # Версии Payload (published + draft)
     version_params = {**params, "parent_id": content_id}
@@ -431,6 +496,15 @@ def load_record(
 
     insert_version_rels(cur, published_version_id, genre_ids)
     insert_version_rels(cur, draft_version_id, genre_ids)
+
+    # Версии пересоздаются заново — переносим в них постер из content,
+    # иначе привязанный постер «пропадёт» в версиях Payload.
+    if keep_version_poster:
+        cur.execute(
+            "UPDATE _content_v SET version_poster_id = "
+            "(SELECT poster_id FROM content WHERE id = %(id)s) WHERE parent_id = %(id)s",
+            {"id": content_id},
+        )
 
     # Статус выхода — после пересоздания версий, чтобы попал и в них.
     if status_support is not None:
@@ -478,6 +552,10 @@ def main(argv: list[str] | None = None) -> None:
 
             require_content_columns(cur)
             status_support = detect_status_support(cur)
+            keep_version_poster = (
+                "poster_id" in table_columns(cur, "content")
+                and "version_poster_id" in table_columns(cur, "_content_v")
+            )
             if not status_support.content:
                 print(
                     f"Примечание: колонки content.{status_support.column} нет — "
@@ -488,6 +566,7 @@ def main(argv: list[str] | None = None) -> None:
                 genre_index = genres_mod.sync_genres_table(cur, args.genres)
             else:
                 genre_index = genres_mod.sync_genres_from_records(cur, records)
+            genres_mod.ensure_unique_genres(cur)
 
             for idx, rec in enumerate(records, start=1):
                 if not rec.get("type"):
@@ -500,7 +579,8 @@ def main(argv: list[str] | None = None) -> None:
                 cur.execute("SAVEPOINT rec")
                 try:
                     s_count, ep_count = load_record(
-                        cur, rec, genre_index, unmapped_genres, status_support
+                        cur, rec, genre_index, unmapped_genres, status_support,
+                        keep_version_poster,
                     )
                 except Exception as exc:  # noqa: BLE001
                     cur.execute("ROLLBACK TO SAVEPOINT rec")
@@ -519,6 +599,8 @@ def main(argv: list[str] | None = None) -> None:
 
                 if idx % 100 == 0:
                     print(f"  ...обработано {idx} записей")
+
+            publish_all_content(cur)
 
     print("\n--- Сводка ---")
     print(f"Вставлено/обновлено записей content: {inserted}")

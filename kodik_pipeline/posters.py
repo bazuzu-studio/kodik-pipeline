@@ -108,53 +108,122 @@ def build_media_insert(media_cols: set[str], values: dict[str, Any]) -> tuple[st
     return f"INSERT INTO media ({col_names}) VALUES ({placeholders}) RETURNING id;", vals
 
 
-def process_record(cur, rec: dict[str, Any], s3, cfg: S3Config, media_cols: set[str], poster_cols: list[str], *, timeout: int = 15, retries: int = 2, max_bytes: int = DEFAULT_MAX_BYTES) -> str:
+def pick_poster_column(poster_cols: list[str]) -> str | None:
+    """Колонка content со ссылкой на постер: предпочтительно poster_id
+    (upload-поле Payload), иначе первая подходящая."""
+    if not poster_cols:
+        return None
+    return "poster_id" if "poster_id" in poster_cols else poster_cols[0]
+
+
+def version_poster_update_sql(version_cols: set[str]) -> str | None:
+    """UPDATE постера в версиях Payload; None, если колонки версии нет."""
+    if "version_poster_id" not in version_cols:
+        return None
+    sets = ["version_poster_id = %(m)s"]
+    if "version_updated_at" in version_cols:
+        sets.append("version_updated_at = now()")
+    if "updated_at" in version_cols:
+        sets.append("updated_at = now()")
+    return f"UPDATE _content_v SET {', '.join(sets)} WHERE parent_id = %(c)s"
+
+
+def find_content_for_poster(cur, rec: dict[str, Any]) -> int | None:
+    """id записи content: по title_en, затем по kodik_id (как в load)."""
+    cur.execute("SELECT id FROM content WHERE title_en = %(t)s ORDER BY id LIMIT 1", {"t": rec["titleEn"]})
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    kodik_id = rec.get("kodikId")
+    if kodik_id not in (None, ""):
+        cur.execute("SELECT id FROM content WHERE kodik_id = %(k)s ORDER BY id LIMIT 1", {"k": str(kodik_id)})
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    return None
+
+
+def process_record(
+    cur,
+    rec: dict[str, Any],
+    s3,
+    cfg: S3Config,
+    media_cols: set[str],
+    poster_cols: list[str],
+    *,
+    version_cols: set[str] | None = None,
+    timeout: int = 15,
+    retries: int = 2,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+) -> str:
     """Обрабатывает одну запись data/kodik.json. Возвращает статус:
-    'ok' | 'exists' | 'no_url' | 'no_content' | 'error'."""
+    'ok' | 'exists' | 'has_poster' | 'no_url' | 'no_content' | 'error'.
+
+    Порядок: сначала проверяется БД (запись есть? поле постера пустое?) и
+    только потом скачивается картинка и грузится в S3 — поэтому для тайтлов,
+    у которых постер уже привязан, не выполняется ни загрузка, ни обновление.
+    """
     poster_url = rec.get(POSTER_URL_FIELD)
     title_en = rec.get("titleEn")
     title_ru = rec.get("titleRu")
     slug = rec.get("slug")
+    poster_col = pick_poster_column(poster_cols)
 
     if not poster_url:
         return "no_url"
     if not title_en or not slug:
         return "no_content"
-
-    try:
-        data, mime_type, width, height = download_image(poster_url, retries=retries, timeout=timeout, max_bytes=max_bytes)
-        ext = "jpg" if mime_type == "image/jpeg" else mime_type.split("/")[1]
-        filename = f"{slugify(slug)}.{ext}"
-        object_key = f"{S3_PREFIX}/{filename}" if S3_PREFIX else filename
-    except Exception as e:  # noqa: BLE001
-        print(f"  [ERR] {title_en}: скачивание — {e}")
-        return "error"
-
-    try:
-        s3.put_object(Bucket=cfg.bucket, Key=object_key, Body=data, ContentType=mime_type)
-    except ClientError as e:
-        print(f"  [ERR] {title_en}: S3 — {e}")
+    if poster_col is None:
+        print(f"  [ERR] {title_en}: в content нет колонки постера")
         return "error"
 
     cur.execute("SAVEPOINT sp1")
     try:
-        cur.execute("SELECT id FROM content WHERE title_en = %(t)s", {"t": title_en})
-        row = cur.fetchone()
-        if not row:
-            cur.execute("ROLLBACK TO SAVEPOINT sp1")
-            print(f"  [SKIP] {title_en}: нет в БД")
+        content_id = find_content_for_poster(cur, rec)
+        if content_id is None:
+            cur.execute("RELEASE SAVEPOINT sp1")
+            print(f"  [SKIP] {title_en}: нет в БД (сначала выполните load)")
             return "no_content"
-        content_id = row[0]
 
-        cur.execute("SELECT id FROM media WHERE filename = %(f)s", {"f": filename})
-        row = cur.fetchone()
+        cur.execute(f"SELECT {poster_col} FROM content WHERE id = %(c)s", {"c": content_id})
+        current = cur.fetchone()[0]
+        if current is not None and current != "":
+            cur.execute("RELEASE SAVEPOINT sp1")
+            print(f"  [HAS] {title_en}: постер уже задан ({poster_col}={current}) — пропуск")
+            return "has_poster"
 
-        media_exists = row is not None
+        # Уже есть media с таким файлом (например, прошлый запуск загрузил
+        # файл, но привязка не сохранилась) — просто привязываем, без скачивания.
+        base = slugify(slug)
+        candidates = [f"{base}.{e}" for e in ("jpg", "jpeg", "png", "webp", "gif")]
+        cur.execute("SELECT id, filename FROM media WHERE filename = ANY(%(f)s) ORDER BY id LIMIT 1", {"f": candidates})
+        media_row = cur.fetchone()
+
+        media_exists = media_row is not None
         if media_exists:
-            media_id = row[0]
+            media_id, filename = media_row
             print(f"  [EXISTS] {title_en}: media.id={media_id}")
         else:
-            alt_text = title_ru or title_en or f"Постер {slugify(slug)}"
+            try:
+                data, mime_type, width, height = download_image(
+                    poster_url, retries=retries, timeout=timeout, max_bytes=max_bytes
+                )
+                ext = "jpg" if mime_type == "image/jpeg" else mime_type.split("/")[1]
+                filename = f"{base}.{ext}"
+                object_key = f"{S3_PREFIX}/{filename}" if S3_PREFIX else filename
+            except Exception as e:  # noqa: BLE001
+                cur.execute("RELEASE SAVEPOINT sp1")
+                print(f"  [ERR] {title_en}: скачивание — {e}")
+                return "error"
+
+            try:
+                s3.put_object(Bucket=cfg.bucket, Key=object_key, Body=data, ContentType=mime_type)
+            except ClientError as e:
+                cur.execute("RELEASE SAVEPOINT sp1")
+                print(f"  [ERR] {title_en}: S3 — {e}")
+                return "error"
+
+            alt_text = title_ru or title_en or f"Постер {base}"
             if len(alt_text) > 255:
                 alt_text = alt_text[:252] + "..."
 
@@ -172,21 +241,16 @@ def process_record(cur, rec: dict[str, Any], s3, cfg: S3Config, media_cols: set[
             media_id = cur.fetchone()[0]
             print(f"  [OK] {title_en}: media.id={media_id}, {filename} ({width}x{height})")
 
-        if poster_cols:
-            poster_col = "poster_id" if "poster_id" in poster_cols else poster_cols[0]
-            cur.execute(
-                f"UPDATE content SET {poster_col} = %(m)s, updated_at = now() WHERE id = %(c)s",
-                {"m": media_id, "c": content_id},
-            )
-
         cur.execute(
-            """
-            UPDATE _content_v
-            SET version_poster_id = %(m)s, version_updated_at = now(), updated_at = now()
-            WHERE parent_id = %(c)s AND latest = true
-            """,
+            f"UPDATE content SET {poster_col} = %(m)s, updated_at = now() WHERE id = %(c)s",
             {"m": media_id, "c": content_id},
         )
+        if cur.rowcount != 1:
+            raise RuntimeError(f"не удалось обновить content.{poster_col} (id={content_id})")
+
+        version_sql = version_poster_update_sql(version_cols or set())
+        if version_sql:
+            cur.execute(version_sql, {"m": media_id, "c": content_id})
 
         cur.execute("RELEASE SAVEPOINT sp1")
         return "exists" if media_exists else "ok"
@@ -220,7 +284,7 @@ def main(argv: list[str] | None = None) -> None:
 
     records = load_json(args.merged)
 
-    counts = {"ok": 0, "exists": 0, "no_url": 0, "no_content": 0, "error": 0}
+    counts = {"ok": 0, "exists": 0, "has_poster": 0, "no_url": 0, "no_content": 0, "error": 0}
 
     with transaction(database_url()) as conn:
         with conn.cursor() as cur:
@@ -236,17 +300,31 @@ def main(argv: list[str] | None = None) -> None:
             )
             poster_cols = [row[0] for row in cur.fetchall()]
             if not poster_cols:
-                print("ВНИМАНИЕ: в таблице content нет колонки poster. poster_id не будет обновлён.")
-            else:
-                print(f"Колонки постера в content: {poster_cols}")
+                raise SystemExit(
+                    "Ошибка: в таблице content нет колонки постера (poster_id) — привязывать нечего. "
+                    "Примените миграции CMS."
+                )
+            print(f"Колонки постера в content: {poster_cols}")
+
+            version_cols = table_columns(cur, "_content_v")
+            if "version_poster_id" not in version_cols:
+                print("Примечание: в _content_v нет version_poster_id — версии не обновляются.")
 
             for rec in records:
-                status = process_record(cur, rec, s3, cfg, media_cols, poster_cols, timeout=args.timeout, retries=args.retries, max_bytes=args.max_bytes)
+                status = process_record(
+                    cur, rec, s3, cfg, media_cols, poster_cols,
+                    version_cols=version_cols,
+                    timeout=args.timeout, retries=args.retries, max_bytes=args.max_bytes,
+                )
                 counts[status] = counts.get(status, 0) + 1
+                # Коммит после каждой записи: сбой на поздней записи не теряет
+                # уже сделанные привязки (файлы в S3 к этому моменту загружены).
+                conn.commit()
 
     uploaded = counts["ok"] + counts["exists"]
     print(
-        f"\nГотово: загружено={uploaded}, "
+        f"\nГотово: привязано={uploaded}, "
+        f"уже с постером (пропущено)={counts['has_poster']}, "
         f"без URL={counts['no_url']}, "
         f"без content={counts['no_content']}, "
         f"ошибок={counts['error']}"

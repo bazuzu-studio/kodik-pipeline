@@ -6,6 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # init: true — у `sleep` как PID 1 нет обработчика SIGTERM, и остановка/передеплой
+    # ждали 10 с до SIGKILL. tini пробрасывает сигналы и подбирает зомби-процессы.
+    init: true
     command: ["sleep", "infinity"]
     environment:
       # Postgres из проекта Dokploy: хост = "Internal Host" сервиса БД
@@ -26,6 +29,11 @@ services:
       KODIK_RETRIES: ${KODIK_RETRIES:-5}
 
       RELEASE_STATUS_COLUMN: ${RELEASE_STATUS_COLUMN:-release_status}
+
+      # Сброс кэша сайта после load / update-ongoing (иначе новое появится через ~60 с).
+      # REVALIDATE_URL — alias сервиса web в dokploy-network; секрет тот же, что у web и CMS.
+      REVALIDATE_URL: ${REVALIDATE_URL:-http://movhub-web:3000}
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
     volumes:
       - kodik_data:/app/data
     networks:

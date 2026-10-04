@@ -181,15 +181,13 @@ def _pick_genres(md: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for item in raw:
         if isinstance(item, str):
-            title = item
+            title = item.strip()
         elif isinstance(item, dict):
-            title = str(item.get("title") or item.get("name") or "")
+            title = str(item.get("title") or item.get("name") or "").strip()
         else:
             continue
-        # В нижнем регистре и без повторов: «Экшен» и «экшен» — один жанр.
-        title = " ".join(title.split()).casefold()
-        if title and title not in seen:
-            seen.add(title)
+        if title and title.casefold() not in seen:
+            seen.add(title.casefold())
             result.append(title)
     return result
 
@@ -383,7 +381,12 @@ def fetch_normalized(
             standalone.append(rec)
 
     grouped: list[dict[str, Any]] = list(standalone)
-    for franchise_id, items in groups.items():
+    for group_key, items in groups.items():
+        # Значение для content.franchise_id. Должно совпадать с тем, что миграция
+        # CMS проставила существующим записям (= голый kinopoisk_id), иначе сезоны
+        # одной франшизы разъедутся по разным идентификаторам. Ключ группировки
+        # с префиксом (kp:/imdb:) нужен только внутри этой функции.
+        franchise_id = group_key.split(":", 1)[1]
         items.sort(key=lambda r: (
             r.get("releaseYear") if isinstance(r.get("releaseYear"), int) else 9999,
             str(r.get("shikimoriId") or "0"),

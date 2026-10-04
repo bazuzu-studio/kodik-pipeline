@@ -29,6 +29,7 @@ from . import api
 from .config import database_url
 from .db import transaction, try_advisory_lock
 from .load import INSERT_SEASON_SQL, insert_episode
+from .revalidate import notify_frontend
 from .status import ONGOING, StatusSupport, detect_status_support, set_release_status
 
 
@@ -273,6 +274,10 @@ def run(args: argparse.Namespace) -> None:
                     stats.missing.append(str(label))
                 elif id(rec) in stale_ids_seen:
                     stats.finished.append(f"{label} → {rec.get('status')}")
+
+    # Транзакция закоммичена — сбрасываем кэш сайта, если что-то изменилось.
+    if not args.dry_run and stats.titles_changed:
+        notify_frontend()
 
     prefix = "[DRY-RUN, изменения откатены] " if args.dry_run else ""
     print(f"\n{prefix}--- Сводка update-ongoing ---")

@@ -24,3 +24,8 @@ def test_fetch_refuses_to_overwrite_with_empty_result(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         pipeline.main(["fetch", "--out", str(out)])
     assert out.read_text() == "[1]"
+
+
+def test_revalidate_command_registered():
+    args = pipeline.build_parser().parse_args(["revalidate"])
+    assert args.func is pipeline.revalidate_command

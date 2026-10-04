@@ -2,7 +2,8 @@
 
 Запуск:  TEST_DATABASE_URL=postgres://user@host:5432/db pytest tests/test_integration_db.py
 Нужна тестовая БД, в которой применены миграции CMS (`pnpm payload migrate`),
-включая колонки release_status / version_release_status (enum).
+включая колонки release_status / version_release_status (enum)
+и franchise_id / version_franchise_id (миграция 20261003_120000).
 Без TEST_DATABASE_URL тесты пропускаются. Таблицы ОЧИЩАЮТСЯ — используйте тестовую БД!
 Схему тесты не меняют.
 """
@@ -175,3 +176,45 @@ def test_advisory_lock_blocks_concurrent_writer(db, monkeypatch, tmp_path):
     finally:
         other.rollback()
         other.close()
+
+
+def test_reload_is_idempotent_and_title_en_is_not_a_key(db, monkeypatch, tmp_path):
+    """В CMS unique-индекс по title_en удалён: повторный load не должен падать
+    (раньше ON CONFLICT (title_en) требовал этот индекс) и не плодить дубли;
+    два тайтла с одинаковым title_en живут рядом."""
+    items = [serial("serial-1", 2020, [1]), serial("serial-2", 2022, [1])]
+    import_catalog(monkeypatch, tmp_path, items)
+    import_catalog(monkeypatch, tmp_path, items)
+    db.execute("SELECT count(*), count(DISTINCT kodik_id), count(DISTINCT slug) FROM content")
+    assert db.fetchone() == (2, 2, 2)
+
+    db.execute("SELECT slug FROM content ORDER BY id")
+    slugs_before = db.fetchall()
+    import_catalog(monkeypatch, tmp_path, items)
+    db.execute("SELECT slug FROM content ORDER BY id")
+    assert db.fetchall() == slugs_before  # URL тайтлов стабильны
+
+
+def test_load_publishes_and_sets_franchise(db, monkeypatch, tmp_path):
+    import_catalog(monkeypatch, tmp_path, [serial("serial-1", 2020, [1]), serial("serial-2", 2022, [1])])
+    db.execute("SELECT DISTINCT _status::text FROM content")
+    assert db.fetchall() == [("published",)]  # публичное чтение отдаёт только published
+    db.execute("SELECT DISTINCT franchise_id FROM content")
+    assert db.fetchall() == [("777",)]
+    db.execute("SELECT DISTINCT version_franchise_id FROM _content_v")
+    assert db.fetchall() == [("777",)]
+
+
+def test_load_notifies_frontend_only_after_commit(db, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(load, "notify_frontend", lambda: calls.append(1))
+    import_catalog(monkeypatch, tmp_path, [serial("serial-2", 2022, [1])])
+    assert calls == [1]
+
+    monkeypatch.setattr(api, "fetch_ongoing",
+                        lambda **_: [api.normalize_item(serial("serial-2", 2022, [1, 2]))])
+    monkeypatch.setattr(ongoing, "notify_frontend", lambda: calls.append(2))
+    ongoing.run(ongoing_args(dry_run=True, no_recheck=True))
+    assert calls == [1]  # dry-run кэш не сбрасывает
+    ongoing.run(ongoing_args(no_recheck=True))
+    assert calls == [1, 2]

@@ -8,6 +8,7 @@
     python pipeline.py update-ongoing   обновить серии/статус у онгоингов
     python pipeline.py posters          постеры -> S3/MinIO
     python pipeline.py check-s3         проверка S3/MinIO
+    python pipeline.py revalidate       сбросить кэш сайта вручную
 
 `sync` = fetch API -> load в Postgres. Постеры запускаются отдельно, чтобы
 падение S3 не откатывало импорт каталога. `update-ongoing` не трогает
@@ -80,6 +81,12 @@ def check_s3_command(args) -> None:
     check_connection(S3Config.from_env())
 
 
+def revalidate_command(args) -> None:
+    from kodik_pipeline.revalidate import notify_frontend
+    if not notify_frontend():
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pipeline.py",
@@ -121,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=posters_command)
 
     sub.add_parser("check-s3", help="проверить S3/MinIO").set_defaults(func=check_s3_command)
+    sub.add_parser(
+        "revalidate", help="сбросить кэш сайта (REVALIDATE_URL / REVALIDATE_SECRET)"
+    ).set_defaults(func=revalidate_command)
     return parser
 
 

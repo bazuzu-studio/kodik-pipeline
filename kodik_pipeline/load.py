@@ -39,6 +39,7 @@ from .config import database_url
 from .db import table_columns, transaction, try_advisory_lock
 from .json_io import load_json, save_json
 from .revalidate import notify_frontend
+from .posters_sync import copy_images_to_versions
 from .seo import SeoSupport, copy_seo_to_versions, detect_seo_support, set_seo_meta
 from .richtext import build_richtext
 from .status import StatusSupport, detect_status_support, set_release_status
@@ -511,6 +512,8 @@ def load_record(
     if seo_support is not None:
         set_seo_meta(cur, content_id, rec, seo_support)
         copy_seo_to_versions(cur, content_id, seo_support)
+    # Постер и фон (поставленные шагом posters) тоже должны пережить пересоздание версий.
+    copy_images_to_versions(cur, content_id)
 
     # Сезоны и эпизоды (только для series)
     seasons_count = 0

@@ -19,6 +19,9 @@
   - content.franchise_id — общий идентификатор сезонов одного сериала
     (kinopoisk_id или imdb_id); сайт группирует по нему сезоны. Пишется,
     только если колонка есть (миграция CMS 20261003_120000).
+  - SEO-поля CMS (content.meta_*, плагин plugin-seo): пустые title/description
+    заполняются из данных API, заполненные вручную не трогаются; при
+    пересоздании _content_v значения копируются из content (см. seo.py).
   - После успешной загрузки сбрасывается кэш сайта (см. revalidate.py).
 
 Запуск: python pipeline.py load --data data/kodik.json --genres genres.json
@@ -36,6 +39,7 @@ from .config import database_url
 from .db import table_columns, transaction, try_advisory_lock
 from .json_io import load_json, save_json
 from .revalidate import notify_frontend
+from .seo import SeoSupport, copy_seo_to_versions, detect_seo_support, set_seo_meta
 from .richtext import build_richtext
 from .status import StatusSupport, detect_status_support, set_release_status
 
@@ -421,6 +425,7 @@ def load_record(
     unmapped_genres: list[str],
     status_support: StatusSupport | None = None,
     franchise_support: tuple[bool, bool] = (False, False),
+    seo_support: SeoSupport | None = None,
 ) -> tuple[int, int]:
     """Загружает одну запись из data/kodik.json.
 
@@ -501,6 +506,11 @@ def load_record(
     if status_support is not None:
         set_release_status(cur, content_id, rec.get("status"), status_support)
     set_franchise_id(cur, content_id, rec.get("franchiseId"), franchise_support)
+    # SEO: пустые meta_title/meta_description заполняем из данных API, затем
+    # переносим meta_* в пересозданные версии (заполненное руками не теряется).
+    if seo_support is not None:
+        set_seo_meta(cur, content_id, rec, seo_support)
+        copy_seo_to_versions(cur, content_id, seo_support)
 
     # Сезоны и эпизоды (только для series)
     seasons_count = 0
@@ -545,6 +555,7 @@ def main(argv: list[str] | None = None) -> None:
             require_content_columns(cur)
             status_support = detect_status_support(cur)
             franchise_support = detect_franchise_support(cur)
+            seo_support = detect_seo_support(cur)
             if not franchise_support[0]:
                 print(
                     "Примечание: колонки content.franchise_id нет (миграция CMS "
@@ -572,7 +583,8 @@ def main(argv: list[str] | None = None) -> None:
                 cur.execute("SAVEPOINT rec")
                 try:
                     s_count, ep_count = load_record(
-                        cur, rec, genre_index, unmapped_genres, status_support, franchise_support
+                        cur, rec, genre_index, unmapped_genres, status_support, franchise_support,
+                        seo_support,
                     )
                 except Exception as exc:  # noqa: BLE001
                     cur.execute("ROLLBACK TO SAVEPOINT rec")

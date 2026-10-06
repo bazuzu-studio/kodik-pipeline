@@ -21,6 +21,7 @@ from . import s3_client
 from .config import S3Config, database_url
 from .db import table_columns, transaction
 from .json_io import load_json
+from .seo import SeoSupport, detect_seo_support, set_seo_image
 from .text_utils import slugify
 
 try:
@@ -108,7 +109,7 @@ def build_media_insert(media_cols: set[str], values: dict[str, Any]) -> tuple[st
     return f"INSERT INTO media ({col_names}) VALUES ({placeholders}) RETURNING id;", vals
 
 
-def process_record(cur, rec: dict[str, Any], s3, cfg: S3Config, media_cols: set[str], poster_cols: list[str], *, timeout: int = 15, retries: int = 2, max_bytes: int = DEFAULT_MAX_BYTES) -> str:
+def process_record(cur, rec: dict[str, Any], s3, cfg: S3Config, media_cols: set[str], poster_cols: list[str], seo_support: SeoSupport | None = None, *, timeout: int = 15, retries: int = 2, max_bytes: int = DEFAULT_MAX_BYTES) -> str:
     """Обрабатывает одну запись data/kodik.json. Возвращает статус:
     'ok' | 'exists' | 'no_url' | 'no_content' | 'error'."""
     poster_url = rec.get(POSTER_URL_FIELD)
@@ -188,6 +189,10 @@ def process_record(cur, rec: dict[str, Any], s3, cfg: S3Config, media_cols: set[
             {"m": media_id, "c": content_id},
         )
 
+        # SEO: постер — картинка для превью по умолчанию (если не задана вручную).
+        if seo_support is not None:
+            set_seo_image(cur, content_id, media_id, seo_support)
+
         cur.execute("RELEASE SAVEPOINT sp1")
         return "exists" if media_exists else "ok"
     except Exception as e:  # noqa: BLE001
@@ -225,6 +230,7 @@ def main(argv: list[str] | None = None) -> None:
     with transaction(database_url()) as conn:
         with conn.cursor() as cur:
             media_cols = table_columns(cur, "media")
+            seo_support = detect_seo_support(cur)
             print(f"Колонки media: {sorted(media_cols)}")
 
             cur.execute(
@@ -241,7 +247,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"Колонки постера в content: {poster_cols}")
 
             for rec in records:
-                status = process_record(cur, rec, s3, cfg, media_cols, poster_cols, timeout=args.timeout, retries=args.retries, max_bytes=args.max_bytes)
+                status = process_record(cur, rec, s3, cfg, media_cols, poster_cols, seo_support, timeout=args.timeout, retries=args.retries, max_bytes=args.max_bytes)
                 counts[status] = counts.get(status, 0) + 1
 
     uploaded = counts["ok"] + counts["exists"]

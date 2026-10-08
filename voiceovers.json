@@ -1,13 +1,11 @@
 [
   {
     "title": "AniLibria",
-    "slug": "anilibria",
-    "kodikTranslationId": 610
+    "slug": "anilibria"
   },
   {
     "title": "AniDub",
-    "slug": "anidub",
-    "kodikTranslationId": 609
+    "slug": "anidub"
   },
   {
     "title": "JAM CLUB",
@@ -15,23 +13,19 @@
   },
   {
     "title": "Dream Cast",
-    "slug": "dream-cast",
-    "kodikTranslationId": 1978
+    "slug": "dream-cast"
   },
   {
     "title": "SHIZA Project",
-    "slug": "shiza-project",
-    "kodikTranslationId": 767
+    "slug": "shiza-project"
   },
   {
     "title": "Flarrow Films",
-    "slug": "flarrow-films",
-    "kodikTranslationId": 1002
+    "slug": "flarrow-films"
   },
   {
     "title": "AniBaza",
-    "slug": "anibaza",
-    "kodikTranslationId": 2822
+    "slug": "anibaza"
   },
   {
     "title": "AnimeVostorg",
@@ -43,43 +37,35 @@
   },
   {
     "title": "AniStar",
-    "slug": "anistar",
-    "kodikTranslationId": 910
+    "slug": "anistar"
   },
   {
     "title": "AniBreeze",
-    "slug": "anibreeze",
-    "kodikTranslationId": 2364
+    "slug": "anibreeze"
   },
   {
     "title": "Inari Studio",
-    "slug": "inari-studio",
-    "kodikTranslationId": 2556
+    "slug": "inari-studio"
   },
   {
     "title": "Amber",
-    "slug": "amber",
-    "kodikTranslationId": 933
+    "slug": "amber"
   },
   {
     "title": "Amazing Dubbing",
-    "slug": "amazing-dubbing",
-    "kodikTranslationId": 963
+    "slug": "amazing-dubbing"
   },
   {
     "title": "AniLiberty",
-    "slug": "aniliberty",
-    "kodikTranslationId": 3861
+    "slug": "aniliberty"
   },
   {
     "title": "AniMaunt",
-    "slug": "animaunt",
-    "kodikTranslationId": 825
+    "slug": "animaunt"
   },
   {
     "title": "Studio Chubu",
-    "slug": "studio-chubu",
-    "kodikTranslationId": 2337
+    "slug": "studio-chubu"
   },
   {
     "title": "KoeDub",
@@ -87,8 +73,7 @@
   },
   {
     "title": "AniFilm",
-    "slug": "anifilm",
-    "kodikTranslationId": 654
+    "slug": "anifilm"
   },
   {
     "title": "Bento Team",
@@ -96,23 +81,19 @@
   },
   {
     "title": "AniCore",
-    "slug": "anicore",
-    "kodikTranslationId": 3602
+    "slug": "anicore"
   },
   {
     "title": "AniLane",
-    "slug": "anilane",
-    "kodikTranslationId": 2854
+    "slug": "anilane"
   },
   {
     "title": "DeliciousDub (ChillDUB)",
-    "slug": "deliciousdub-chilldub",
-    "kodikTranslationId": 2769
+    "slug": "deliciousdub-chilldub"
   },
   {
     "title": "FumoDub",
-    "slug": "fumodub",
-    "kodikTranslationId": 1895
+    "slug": "fumodub"
   },
   {
     "title": "HekaiPROject",
@@ -120,18 +101,15 @@
   },
   {
     "title": "KOTODAMA Studio",
-    "slug": "kotodama-studio",
-    "kodikTranslationId": 4237
+    "slug": "kotodama-studio"
   },
   {
     "title": "Moonlight Studio",
-    "slug": "moonlight-studio",
-    "kodikTranslationId": 3992
+    "slug": "moonlight-studio"
   },
   {
     "title": "OnWave",
-    "slug": "onwave",
-    "kodikTranslationId": 1811
+    "slug": "onwave"
   },
   {
     "title": "Re: Voice",
@@ -139,68 +117,55 @@
   },
   {
     "title": "STEPonee",
-    "slug": "steponee",
-    "kodikTranslationId": 641
+    "slug": "steponee"
   },
   {
     "title": "AniClub",
-    "slug": "aniclub",
-    "kodikTranslationId": 2699
+    "slug": "aniclub"
   },
   {
     "title": "AniCosmic",
-    "slug": "anicosmic",
-    "kodikTranslationId": 2700
+    "slug": "anicosmic"
   },
   {
     "title": "AniFame",
-    "slug": "anifame",
-    "kodikTranslationId": 1781
+    "slug": "anifame"
   },
   {
     "title": "AniFate",
-    "slug": "anifate",
-    "kodikTranslationId": 3596
+    "slug": "anifate"
   },
   {
     "title": "AniJoy",
-    "slug": "anijoy",
-    "kodikTranslationId": 2403
+    "slug": "anijoy"
   },
   {
     "title": "AniLeague.tv",
-    "slug": "anileague-tv",
-    "kodikTranslationId": 1525
+    "slug": "anileague-tv"
   },
   {
     "title": "AniMani",
-    "slug": "animani",
-    "kodikTranslationId": 3298
+    "slug": "animani"
   },
   {
     "title": "AniMur",
-    "slug": "animur",
-    "kodikTranslationId": 2222
+    "slug": "animur"
   },
   {
     "title": "AniSquad",
-    "slug": "anisquad",
-    "kodikTranslationId": 3913
+    "slug": "anisquad"
   },
   {
     "title": "Anything Group",
-    "slug": "anything-group",
-    "kodikTranslationId": 1099
+    "slug": "anything-group"
   },
   {
     "title": "CelestialDub",
-    "slug": "celestialdub",
-    "kodikTranslationId": 3273
+    "slug": "celestialdub"
   },
   {
     "title": "CozySound",
-    "slug": "cozysound",
-    "kodikTranslationId": 4043
+    "slug": "cozysound"
   },
   {
     "title": "Dubbing Alliance",
@@ -212,7 +177,6 @@
   },
   {
     "title": "Kitsune Studio",
-    "slug": "kitsune-studio",
-    "kodikTranslationId": 3470
+    "slug": "kitsune-studio"
   }
 ]

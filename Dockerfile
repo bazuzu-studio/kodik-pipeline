@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-COPY pipeline.py fetch_kodik.py genres.json ./
+COPY pipeline.py fetch_kodik.py genres.json voiceovers.json ./
 COPY kodik_pipeline ./kodik_pipeline
 
 # data/ — том с kodik.json; unmapped_genres.json пишется в рабочую папку

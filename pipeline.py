@@ -6,6 +6,11 @@
     python pipeline.py load             data/kodik.json -> Postgres
     python pipeline.py sync             fetch + load (весь каталог)
     python pipeline.py update-ongoing   обновить серии/статус у онгоингов
+    python pipeline.py fix-seasons      убрать дубли сезонов в БД (после fetch)
+    python pipeline.py sync-voiceovers  справочник озвучек (voiceovers.json) -> Postgres
+    python pipeline.py match-voiceovers найти id озвучек Kodik для voiceovers.json
+    python pipeline.py sync-dubs        ссылки на плеер по каждой озвучке -> episode_sources
+    python pipeline.py sync-schedule    даты серий и «следующая серия» из AniList
     python pipeline.py posters          постеры -> S3/MinIO
     python pipeline.py check-s3         проверка S3/MinIO
     python pipeline.py revalidate       сбросить кэш сайта вручную
@@ -75,6 +80,31 @@ def update_ongoing_command(args) -> None:
     run(args)
 
 
+def fix_seasons_command(args) -> None:
+    from kodik_pipeline.fix_seasons import run
+    run(args)
+
+
+def sync_voiceovers_command(args) -> None:
+    from kodik_pipeline.voiceovers import run
+    run(args)
+
+
+def match_voiceovers_command(args) -> None:
+    from kodik_pipeline.translations import run
+    run(args)
+
+
+def sync_dubs_command(args) -> None:
+    from kodik_pipeline.sources import run
+    run(args)
+
+
+def sync_schedule_command(args) -> None:
+    from kodik_pipeline.schedule import run
+    run(args)
+
+
 def check_s3_command(args) -> None:
     from kodik_pipeline.config import S3Config
     from kodik_pipeline.s3_client import check_connection
@@ -119,6 +149,77 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-recheck", action="store_true", help="не перепроверять тайтлы, пропавшие из онгоингов")
     p.add_argument("--recheck-limit", type=int, default=200, help="максимум перепроверяемых тайтлов за запуск")
     p.set_defaults(func=update_ongoing_command)
+
+    p = sub.add_parser(
+        "fix-seasons",
+        help="объединить дубли сезонов и выровнять номера по data/kodik.json (без пересоздания контента)",
+    )
+    p.add_argument("--data", default=DEFAULT_DATA)
+    p.add_argument("--dry-run", action="store_true", help="выполнить всё, но откатить изменения в БД")
+    p.set_defaults(func=fix_seasons_command)
+
+    p = sub.add_parser(
+        "sync-voiceovers",
+        help="справочник озвучек voiceovers.json -> таблица voiceovers (нужна коллекция Voiceovers в CMS)",
+    )
+    p.add_argument("--file", default="voiceovers.json")
+    p.add_argument("--dry-run", action="store_true", help="выполнить всё, но откатить изменения в БД")
+    p.set_defaults(func=sync_voiceovers_command)
+
+    p = sub.add_parser(
+        "match-voiceovers",
+        help="найти id озвучек Kodik (translations/v2) для voiceovers.json; без --write ничего не меняет",
+    )
+    p.add_argument("--file", default="voiceovers.json")
+    p.add_argument("--token", help="по умолчанию KODIK_TOKEN")
+    p.add_argument("--types", default="anime-serial,anime", help="типы материалов Kodik")
+    p.add_argument("--write", action="store_true", help="записать найденные id в voiceovers.json")
+    p.add_argument(
+        "--pick-largest",
+        action="store_true",
+        help="при нескольких озвучках с одним названием выбрать ту, у которой больше тайтлов",
+    )
+    p.add_argument(
+        "--untracked", type=int, default=15, metavar="N",
+        help="показать N самых крупных озвучек Kodik, которых нет в справочнике (0 — не показывать)",
+    )
+    p.set_defaults(func=match_voiceovers_command)
+
+    p = sub.add_parser(
+        "sync-dubs",
+        help="ссылки на плеер по каждой озвучке справочника -> episode_sources (нужна коллекция EpisodeSources в CMS)",
+    )
+    p.add_argument("--only", nargs="+", metavar="SLUG|ID", help="только эти озвучки (slug или id Kodik)")
+    p.add_argument("--ongoing-only", action="store_true", help="только онгоинги (быстро, для расписания)")
+    p.add_argument(
+        "--no-create-episodes", action="store_true",
+        help="не создавать серии, которых нет в БД (по умолчанию серии других озвучек добавляются в список)",
+    )
+    p.add_argument(
+        "--max-ahead", type=int, default=50, metavar="N",
+        help="не создавать серию с номером дальше N от самой большой существующей (защита от чужой нумерации), по умолчанию 50",
+    )
+    p.add_argument("--limit", type=int, default=None, help="записей на страницу (KODIK_LIMIT)")
+    p.add_argument("--delay", type=float, default=None, help="пауза между страницами, сек (KODIK_DELAY)")
+    p.add_argument("--max-pages", type=int, help="ограничить число страниц на озвучку (для проверок)")
+    p.add_argument("--token", help="по умолчанию KODIK_TOKEN")
+    p.add_argument("--dry-run", action="store_true", help="выполнить всё, но откатить изменения в БД")
+    p.set_defaults(func=sync_dubs_command)
+
+    p = sub.add_parser(
+        "sync-schedule",
+        help="расписание из AniList (по shikimori_id = idMal): episodes.airing_at и «следующая серия»",
+    )
+    p.add_argument("--state", default="data/schedule-state.json", help="файл состояния: какие тайтлы уже проверены")
+    p.add_argument("--only-ongoing", action="store_true", help="только онгоинги (быстро, для крона)")
+    p.add_argument("--all", action="store_true", help="перепроверить и уже проверенные тайтлы")
+    p.add_argument("--overwrite", action="store_true", help="перезаписывать и уже вышедшие серии с датой")
+    p.add_argument("--mal-id", type=int, help="только один тайтл (shikimori_id / idMal)")
+    p.add_argument("--limit", type=int, help="не больше N тайтлов (для проверки)")
+    p.add_argument("--delay", type=float, default=0.8, help="пауза между запросами к AniList, сек (лимит ~90/мин)")
+    p.add_argument("--recheck-days", type=float, default=3.0, help="повторно проверять уже проверенный тайтл с новыми сериями без даты не чаще, чем раз в N дней")
+    p.add_argument("--dry-run", action="store_true", help="выполнить всё, но откатить изменения в БД")
+    p.set_defaults(func=sync_schedule_command)
 
     p = sub.add_parser("posters", help="постеры из API-данных -> S3/MinIO")
     p.add_argument("--data", default=DEFAULT_DATA)

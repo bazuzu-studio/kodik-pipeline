@@ -26,6 +26,7 @@ from typing import Any, Iterator
 from .config import (
     kodik_delay, kodik_limit, kodik_retries, kodik_timeout, require_env,
 )
+from . import franchise
 from .status import is_ongoing, normalize_status
 from .text_utils import slugify
 
@@ -362,8 +363,14 @@ def fetch_normalized(
         seen_ids.add(key)
         result.append(rec)
 
-    # Один и тот же тайтл у Kodik может иметь отдельную запись на каждый
-    # сезон. Группируем только по точному kinopoisk_id/imdb_id.
+    # Одинаковый shikimori_id — это один и тот же сезон: оставляем лучшую запись
+    # (больше серий, свежее обновление), иначе он попал бы в БД дважды.
+    result, skipped_dupes = franchise.drop_duplicate_records(result)
+    for message in skipped_dupes:
+        print(f"  [WARN] {message}")
+
+    # Один и тот же тайтл у Kodik может иметь отдельную запись на каждый сезон
+    # (и на каждую «часть»). Группируем только по точному kinopoisk_id/imdb_id.
     groups: dict[str, list[dict[str, Any]]] = {}
     standalone: list[dict[str, Any]] = []
     for rec in result:
@@ -387,34 +394,37 @@ def fetch_normalized(
         # одной франшизы разъедутся по разным идентификаторам. Ключ группировки
         # с префиксом (kp:/imdb:) нужен только внутри этой функции.
         franchise_id = group_key.split(":", 1)[1]
-        items.sort(key=lambda r: (
-            r.get("releaseYear") if isinstance(r.get("releaseYear"), int) else 9999,
-            str(r.get("shikimoriId") or "0"),
-        ))
-        for number, rec in enumerate(items, start=1):
-            if rec.get("seasons"):
-                rec["seasons"][0]["seasonNumber"] = number
-            rec["seasonNumber"] = number
+
+        kept, skipped = franchise.drop_duplicate_records(items)
+        for message in skipped:
+            print(f"  [WARN] франшиза {franchise_id}: {message}")
+        items[:] = kept
+
+        if len(items) == 1:
+            # Единственная запись франшизы: настоящие номера сезонов Kodik не трогаем.
+            franchise.number_standalone(items[0])
+            items[0]["franchiseId"] = franchise_id
+            grouped.append(items[0])
+            continue
+
+        for rec in franchise.assign_franchise_numbers(items):
             rec["franchiseId"] = franchise_id
             grouped.append(rec)
 
     for rec in standalone:
         if rec.get("type") == "series":
-            rec["seasonNumber"] = 1
-            if rec.get("seasons"):
-                rec["seasons"][0]["seasonNumber"] = 1
+            franchise.number_standalone(rec)
 
-    # content.title_en используется как уникальный ключ в текущей БД.
-    # Поэтому разные сезоны одного franchise не могут иметь одинаковый
-    # titleEn: первый сохраняет базовое имя, остальные получают S2/S3/...
+    # Названия сезонов франшизы различаем суффиксом (S2, S3 Part 2): первый
+    # сезон сохраняет базовое имя. Slug — тот же суффикс в нижнем регистре.
     for franchise_items in groups.values():
         if len(franchise_items) <= 1:
             continue
-        for number, rec in enumerate(franchise_items, start=1):
-            if number == 1:
-                continue
-            rec["titleEn"] = f"{rec['titleEn']} S{number}"
-            rec["slug"] = f"{rec['slug']}-s{number}"
+        for rec in franchise_items:
+            suffix = franchise.title_suffix(rec)
+            if suffix:
+                rec["titleEn"] = f"{rec['titleEn']}{suffix}"
+                rec["slug"] = f"{rec['slug']}{franchise.slug_suffix(rec)}"
 
     # На случай двух разных Kodik-записей с одинаковым titleEn (например,
     # фильмы с одинаковым названием) гарантируем уникальный slug/title.

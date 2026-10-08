@@ -16,6 +16,9 @@
   - Тайтл ищется по kodik_id (а не по title_en: уникальный индекс по title_en
     в CMS удалён — ремейки и одноимённые тайтлы). Без kodik_id — запасной
     поиск по title_en среди записей без kodik_id.
+  - Сезоны сопоставляются с уже загруженными без дублей (seasons.py): сезон,
+    чей номер изменился, получает новый номер, а не вторую строку; дубли
+    объединяются. Нумерация частей/сезонов франшизы — franchise.py.
   - content.franchise_id — общий идентификатор сезонов одного сериала
     (kinopoisk_id или imdb_id); сайт группирует по нему сезоны. Пишется,
     только если колонка есть (миграция CMS 20261003_120000).
@@ -39,6 +42,7 @@ from .config import database_url
 from .db import table_columns, transaction, try_advisory_lock
 from .json_io import load_json, save_json
 from .revalidate import notify_frontend
+from .seasons import SeasonStats, franchise_members, renumber_allowed, sync_content_seasons
 from .posters_sync import copy_images_to_versions
 from .seo import SeoSupport, copy_seo_to_versions, detect_seo_support, set_seo_meta
 from .richtext import build_richtext
@@ -141,26 +145,6 @@ RETURNING id;
 INSERT_VERSION_REL_SQL = """
 INSERT INTO _content_v_rels (parent_id, path, genres_id, "order")
 VALUES (%(parent_id)s, 'version.genres', %(genres_id)s, %(order)s);
-"""
-
-# ─── SQL: seasons ───────────────────────────────────────────────
-
-FIND_SEASON_SQL = """
-SELECT id FROM seasons WHERE content_id = %s AND season_number = %s
-"""
-
-INSERT_SEASON_SQL = """
-INSERT INTO seasons (content_id, season_number, title, release_year)
-VALUES (%s, %s, %s, %s)
-RETURNING id
-"""
-
-UPDATE_SEASON_SQL = """
-UPDATE seasons
-SET title = COALESCE(%s, title),
-    release_year = COALESCE(%s, release_year),
-    updated_at = now()
-WHERE id = %s
 """
 
 # ─── SQL: episodes ──────────────────────────────────────────────
@@ -268,43 +252,34 @@ def load_seasons_and_episodes(
     cur,
     content_id: int,
     seasons: list[dict[str, Any]],
+    *,
+    renumber: bool = True,
+    stats: SeasonStats | None = None,
 ) -> tuple[int, int]:
-    """Создаёт/обновляет сезоны и эпизоды для content_id.
+    """Создаёт/обновляет сезоны и эпизоды для content_id без дублей.
     Возвращает (новых_сезонов, новых_эпизодов).
+
+    Сопоставление с уже существующими строками seasons — в seasons.py:
+    сезон, у которого изменился номер, не плодит вторую строку, а получает
+    новый номер; лишние дубли объединяются.
     """
-    count_seasons = 0
+    stats = stats if stats is not None else SeasonStats()
+    created_before = stats.created
     count_episodes = 0
 
-    for season in seasons:
-        season_number = season.get("seasonNumber")
-        if season_number is None:
-            continue
-
-        cur.execute(FIND_SEASON_SQL, (content_id, season_number))
-        row = cur.fetchone()
-
-        if row:
-            season_id = row[0]
-            cur.execute(
-                UPDATE_SEASON_SQL,
-                (season.get("title"), season.get("releaseYear"), season_id),
-            )
-        else:
-            cur.execute(
-                INSERT_SEASON_SQL,
-                (content_id, season_number, season.get("title"), season.get("releaseYear")),
-            )
-            season_id = cur.fetchone()[0]
-            count_seasons += 1
-
+    def on_season(season_id: int, season: dict[str, Any]) -> None:
+        nonlocal count_episodes
         for ep in season.get("episodes", []):
             ep_number = ep.get("number")
             if ep_number is None:
                 continue
-            created = upsert_episode(cur, season_id, ep_number, ep.get("playerLink"))
-            count_episodes += created
+            count_episodes += upsert_episode(cur, season_id, ep_number, ep.get("playerLink"))
 
-    return count_seasons, count_episodes
+    sync_content_seasons(
+        cur, content_id, seasons, on_season,
+        exact_first=True, renumber=renumber, stats=stats,
+    )
+    return stats.created - created_before, count_episodes
 
 
 # ─── Защита от конфликтов slug ───────────────────────────────────
@@ -322,6 +297,18 @@ def find_existing_content(cur, rec: dict[str, Any]) -> tuple[int, str | None] | 
         cur.execute(
             "SELECT id, slug FROM content WHERE kodik_id = %s ORDER BY id LIMIT 1",
             (str(kodik_id),),
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+
+    # Kodik мог выдать новый id для того же сезона: shikimori_id однозначно
+    # определяет сезон аниме, поэтому находим запись по нему, а не создаём дубль.
+    shikimori_id = rec.get("shikimoriId")
+    if shikimori_id not in (None, ""):
+        cur.execute(
+            "SELECT id, slug FROM content WHERE shikimori_id = %s AND type = %s ORDER BY id LIMIT 1",
+            (str(shikimori_id), rec["type"]),
         )
         row = cur.fetchone()
         if row:
@@ -427,6 +414,9 @@ def load_record(
     status_support: StatusSupport | None = None,
     franchise_support: tuple[bool, bool] = (False, False),
     seo_support: SeoSupport | None = None,
+    season_stats: SeasonStats | None = None,
+    members: dict[str, set[str]] | None = None,
+    renumber_cache: dict[str, bool] | None = None,
 ) -> tuple[int, int]:
     """Загружает одну запись из data/kodik.json.
 
@@ -519,8 +509,14 @@ def load_record(
     seasons_count = 0
     episodes_count = 0
     if rec["type"] == "series" and rec.get("seasons"):
+        # Номера сезонов франшизы можно менять у существующих строк, только если
+        # в данных есть вся франшизa (см. seasons.renumber_allowed).
+        renumber = renumber_allowed(
+            cur, rec, members or {}, renumber_cache if renumber_cache is not None else {},
+            franchise_support[0],
+        )
         seasons_count, episodes_count = load_seasons_and_episodes(
-            cur, content_id, rec["seasons"]
+            cur, content_id, rec["seasons"], renumber=renumber, stats=season_stats,
         )
 
     return seasons_count, episodes_count
@@ -549,6 +545,9 @@ def main(argv: list[str] | None = None) -> None:
     total_episodes = 0
     unmapped_genres: list[str] = []
     failed: list[str] = []
+    season_stats = SeasonStats()
+    members = franchise_members(records)
+    renumber_cache: dict[str, bool] = {}
 
     with transaction(database_url()) as conn:
         with conn.cursor() as cur:
@@ -587,7 +586,7 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     s_count, ep_count = load_record(
                         cur, rec, genre_index, unmapped_genres, status_support, franchise_support,
-                        seo_support,
+                        seo_support, season_stats, members, renumber_cache,
                     )
                 except Exception as exc:  # noqa: BLE001
                     cur.execute("ROLLBACK TO SAVEPOINT rec")
@@ -616,6 +615,13 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Пропущено (не определён type): {skipped_no_type}")
     print(f"Ошибок: {len(failed)}")
     print(f"Сезонов создано: {total_seasons}")
+    print(f"Сезонов перенумеровано (без создания дубля): {season_stats.renumbered}")
+    print(f"Дублей сезонов объединено: {season_stats.merged}")
+    if season_stats.kept_extra:
+        print(
+            f"⚠ Лишних сезонов оставлено: {season_stats.kept_extra} "
+            "(в них есть серии, которых нет в основном сезоне — проверьте вручную)"
+        )
     print(f"Эпизодов создано: {total_episodes}")
 
     if unmapped_genres:

@@ -6,7 +6,8 @@
   1. Запрашивает у Kodik только онгоинги (anime_status / all_status = ongoing).
   2. Находит уже загруженный content по kodik_id (франшизы не пересчитываются,
      нумерация сезонов в БД не ломается).
-  3. Добавляет новые серии, обновляет изменившиеся ссылки на плеер.
+  3. Добавляет новые серии, обновляет изменившиеся ссылки на плеер; сезон
+     сопоставляется со строкой в БД без дублей (см. seasons.py).
   4. Обновляет статус выхода (content.release_status), если колонка есть.
   5. Проверяет тайтлы, которые в БД помечены как ongoing, но пропали из
      ответа Kodik (обычно — сериал завершился), и фиксирует их новый статус
@@ -28,8 +29,9 @@ from typing import Any
 from . import api
 from .config import database_url
 from .db import transaction, try_advisory_lock
-from .load import INSERT_SEASON_SQL, insert_episode
+from .load import insert_episode
 from .revalidate import notify_frontend
+from .seasons import SeasonStats, sync_content_seasons
 from .status import ONGOING, StatusSupport, detect_status_support, set_release_status
 
 
@@ -40,6 +42,7 @@ class UpdateStats:
     new_episodes: int = 0
     changed_links: int = 0
     new_seasons: int = 0
+    merged_seasons: int = 0
     status_changed: int = 0
     finished: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
@@ -78,46 +81,6 @@ def sync_episodes(cur, season_id: int, episodes: list[dict[str, Any]]) -> tuple[
     return created, changed
 
 
-def resolve_seasons(
-    cur,
-    content_id: int,
-    rec_seasons: list[dict[str, Any]],
-    stats: UpdateStats,
-) -> list[tuple[int, dict[str, Any]]]:
-    """Сопоставляет сезоны Kodik с сезонами в БД.
-
-    Запись Kodik обычно содержит один сезон, а его номер в БД мог быть
-    перенумерован при группировке франшизы (S1/S2/S3...). Поэтому единственный
-    сезон сопоставляется с единственным сезоном content напрямую, иначе — по номеру.
-    """
-    cur.execute(
-        "SELECT id, season_number FROM seasons WHERE content_id = %s ORDER BY season_number",
-        (content_id,),
-    )
-    db_seasons = cur.fetchall()
-
-    if len(rec_seasons) == 1 and len(db_seasons) == 1:
-        return [(db_seasons[0][0], rec_seasons[0])]
-
-    by_number = {number: season_id for season_id, number in db_seasons}
-    result: list[tuple[int, dict[str, Any]]] = []
-    for season in rec_seasons:
-        number = season.get("seasonNumber")
-        if number is None:
-            continue
-        season_id = by_number.get(number)
-        if season_id is None:
-            cur.execute(
-                INSERT_SEASON_SQL,
-                (content_id, number, season.get("title"), season.get("releaseYear")),
-            )
-            season_id = cur.fetchone()[0]
-            by_number[number] = season_id
-            stats.new_seasons += 1
-        result.append((season_id, season))
-    return result
-
-
 def touch_content(cur, content_id: int, updated_at: str | None) -> None:
     """Обновляет updated_at у content и его версий (новая серия = обновление тайтла)."""
     cur.execute(
@@ -147,21 +110,34 @@ def update_record(cur, rec: dict[str, Any], support: StatusSupport, stats: Updat
 
     new_eps = changed_links = 0
     rec_seasons = rec.get("seasons") or []
+    season_stats = SeasonStats()
+
+    def on_season(season_id: int, season: dict[str, Any]) -> None:
+        nonlocal new_eps, changed_links
+        created, changed = sync_episodes(cur, season_id, season.get("episodes") or [])
+        new_eps += created
+        changed_links += changed
+
     if rec_seasons:
-        for season_id, season in resolve_seasons(cur, content_id, rec_seasons, stats):
-            created, changed = sync_episodes(cur, season_id, season.get("episodes") or [])
-            new_eps += created
-            changed_links += changed
+        # Номера сезонов здесь «сырые» (у Kodik каждая запись — сезон «1»), а в БД
+        # они посчитаны по франшизе, поэтому запись из одного сезона сопоставляется
+        # со строкой content независимо от номера, и номер не меняется (см. seasons.py).
+        sync_content_seasons(
+            cur, content_id, rec_seasons, on_season,
+            exact_first=False, renumber=False, stats=season_stats,
+        )
+    stats.new_seasons += season_stats.created
+    stats.merged_seasons += season_stats.merged
 
     status_changed = set_release_status(cur, content_id, rec.get("status"), support)
 
-    if new_eps or changed_links:
+    if new_eps or changed_links or season_stats.merged:
         touch_content(cur, content_id, rec.get("updatedAt"))
 
     stats.new_episodes += new_eps
     stats.changed_links += changed_links
     stats.status_changed += int(status_changed)
-    if new_eps or changed_links or status_changed:
+    if new_eps or changed_links or status_changed or season_stats.merged:
         stats.titles_changed += 1
         label = rec.get("titleRu") or rec.get("titleEn") or kodik_id
         parts = []
@@ -169,6 +145,8 @@ def update_record(cur, rec: dict[str, Any], support: StatusSupport, stats: Updat
             parts.append(f"+{new_eps} сер.")
         if changed_links:
             parts.append(f"ссылок: {changed_links}")
+        if season_stats.merged:
+            parts.append(f"дублей сезонов объединено: {season_stats.merged}")
         if status_changed:
             parts.append(f"статус → {rec.get('status')}")
         print(f"  [UPD] {label}: {', '.join(parts)}")
@@ -286,6 +264,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Новых серий: {stats.new_episodes}")
     print(f"Обновлено ссылок: {stats.changed_links}")
     print(f"Новых сезонов: {stats.new_seasons}")
+    print(f"Дублей сезонов объединено: {stats.merged_seasons}")
     print(f"Смен статуса: {stats.status_changed}")
     if stats.finished:
         print(f"Пропали из онгоингов: {len(stats.finished)}")

@@ -211,8 +211,14 @@ def insert_version_rels(cur, version_id: int, genre_ids: list[int]) -> None:
 
 # ─── Функции: сезоны и эпизоды ───────────────────────────────────
 
-def insert_episode(cur, season_id: int, ep_number: int, kodik_link: str | None) -> None:
-    """Создаёт новую серию (без проверки на существование)."""
+def insert_episode(
+    cur, season_id: int, ep_number: int, kodik_link: str | None, *, stamp_available: bool = False
+) -> None:
+    """Создаёт новую серию (без проверки на существование).
+
+    stamp_available — записать episodes.first_available_at = now() (время обнаружения серии;
+    колонка из миграции CMS 20261010_120000). Включает только update-ongoing: серии первичной
+    загрузки каталога появились давно, и «сейчас» для них было бы неправдой."""
     insert_fields: dict[str, Any] = {
         "season_id": season_id,
         "episode_number": ep_number,
@@ -223,6 +229,9 @@ def insert_episode(cur, season_id: int, ep_number: int, kodik_link: str | None) 
 
     col_names = ", ".join(insert_fields)
     placeholders = ", ".join(f"%({c})s" for c in insert_fields)
+    if stamp_available:
+        col_names += ", first_available_at"
+        placeholders += ", now()"
     cur.execute(f"INSERT INTO episodes ({col_names}) VALUES ({placeholders})", insert_fields)
 
 

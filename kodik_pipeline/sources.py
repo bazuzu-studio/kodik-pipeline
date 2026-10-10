@@ -39,28 +39,97 @@
   - таблицу создаёт CMS (cms/EpisodeSources.ts + миграция Payload), пайплайн её
     не создаёт.
 
+Новая схема CMS (миграция 20261010_120000; без неё всё ниже тихо отключено)
+  - episode_sources.first_seen_at — когда пайплайн впервые увидел ссылку озвучки. Ставится
+    только новым ссылкам онгоингов и не при первичной загрузке озвучки (пока у неё нет ни
+    одного источника): у вышедших тайтлов реальное время неизвестно, и «сейчас» было бы
+    неправдой. Из него считается скорость озвучек: first_seen_at − episodes.airing_at.
+  - episodes.first_available_at / sources_count — когда серия впервые появилась на сайте
+    (у любой озвучки) и сколько озвучек у неё есть.
+  - title_dubs — сводка «тайтл ↔ озвучка» (последняя серия, число серий, updated_at Kodik).
+    Если ничего не изменилось, озвучка тайтла пропускается без разбора серий; --full это
+    отключает (нужен после fix-seasons, удаления серий или смены --no-create-episodes).
+  - у онгоинга номер новой серии ограничен episodes_aired Kodik + 3 (кроме --max-ahead).
+
+Режим --by-title
+  Берёт онгоинги из БД и на каждый делает один запрос Kodik /search?shikimori_id=… — в ответе
+  сразу все озвучки тайтла. Вместо ~90 проходов каталога (озвучек × 2 фильтра статуса) —
+  один запрос на онгоинг. Для частого запуска (каждые 10–15 минут).
+
 Запуск:
   python pipeline.py sync-dubs --dry-run
   python pipeline.py sync-dubs --only anidub shiza-project
   python pipeline.py sync-dubs --ongoing-only      # быстрый режим для расписания
+  python pipeline.py sync-dubs --by-title          # онгоинги по одному запросу на тайтл (быстрее)
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Any
 
 from . import api, franchise
-from .config import database_url, kodik_token, kodik_translation_id
+from .config import database_url, kodik_delay, kodik_token, kodik_translation_id
 from .db import table_columns, transaction, try_advisory_lock
 from .ongoing import touch_content
 from .revalidate import notify_frontend
-from .status import is_ongoing
+from .status import detect_status_support, is_ongoing
 
 TABLE = "episode_sources"
 REQUIRED_COLUMNS = {"episode_id", "voiceover_id", "player_link"}
 DEFAULT_MAX_AHEAD = 50
+AIRED_SLACK = 3  # у онгоинга серия не может быть дальше episodes_aired Kodik больше чем на столько
+TITLE_DUBS = "title_dubs"
+TITLE_CHUNK = 20  # тайтлов за одну транзакцию в режиме --by-title
+
+
+@dataclass(frozen=True)
+class Features:
+    """Необязательные возможности новой схемы CMS. Без колонок/таблицы пайплайн
+    работает как раньше (см. миграцию CMS 20261010_120000).
+
+    first_seen    — episode_sources.first_seen_at (когда впервые увидели ссылку озвучки);
+    episode_dates — episodes.first_available_at / sources_count (нужна и first_seen);
+    title_dubs    — таблица title_dubs (сводка по озвучке тайтла, пропуск неизменившихся);
+    backfill      — у озвучки ещё нет ни одного источника: это первичная загрузка, реальное
+                    время появления ссылок неизвестно, поэтому first_seen_at остаётся пустым;
+    full          — не пропускать озвучки, у которых по title_dubs ничего не изменилось.
+    """
+
+    first_seen: bool = False
+    episode_dates: bool = False
+    title_dubs: bool = False
+    backfill: bool = False
+    full: bool = False
+
+
+NO_FEATURES = Features()
+
+
+def detect_features(cur, source_columns: set[str], *, full: bool = False) -> Features:
+    episode_columns = table_columns(cur, "episodes")
+    first_seen = "first_seen_at" in source_columns
+    return Features(
+        first_seen=first_seen,
+        episode_dates=first_seen and {"first_available_at", "sources_count"} <= episode_columns,
+        title_dubs={"content_id", "voiceover_id", "kodik_id", "last_episode", "episodes_count", "kodik_updated_at"}
+        <= table_columns(cur, TITLE_DUBS),
+        full=full,
+    )
+
+
+def voiceovers_with_sources(cur) -> set[int]:
+    cur.execute(f"SELECT DISTINCT voiceover_id FROM {TABLE}")
+    return {row[0] for row in cur.fetchall()}
+
+
+def stamp_new(features: Features, rec: dict[str, Any]) -> bool:
+    """Ставить ли «время появления» новым ссылкам записи. Только у онгоингов и не при
+    первичной загрузке озвучки: у вышедших тайтлов ссылки появились давно, и «сейчас»
+    исказило бы статистику скорости озвучек."""
+    return features.first_seen and not features.backfill and is_ongoing(rec.get("status"))
 
 
 @dataclass
@@ -82,6 +151,7 @@ class SourceStats:
     episodes_created: int = 0  # серии, созданные по ссылке другой озвучки
     episodes_linked: int = 0   # у существующей серии без ссылки проставлена ссылка
     far_episodes: int = 0      # номер слишком далеко от существующих — не создана
+    unchanged_dubs: int = 0    # озвучка тайтла не менялась с прошлого запуска (title_dubs) — пропущена
 
     def changed(self) -> bool:
         return bool(self.created or self.updated or self.episodes_created or self.episodes_linked)
@@ -89,7 +159,7 @@ class SourceStats:
     def add(self, other: "SourceStats") -> None:
         for name in (
             "created", "updated", "unchanged", "no_content", "ambiguous", "no_episode",
-            "episodes_created", "episodes_linked", "far_episodes",
+            "episodes_created", "episodes_linked", "far_episodes", "unchanged_dubs",
         ):
             setattr(self, name, getattr(self, name) + getattr(other, name))
 
@@ -217,27 +287,65 @@ def load_content_index(cur) -> dict[str, int]:
     return index
 
 
-def _insert_source(cur, columns: set[str], episode_id: int, voiceover_id: int, link: str) -> None:
+def _insert_source(
+    cur, columns: set[str], episode_id: int, voiceover_id: int, link: str, *, stamp: bool = False
+) -> None:
     names = ["episode_id", "voiceover_id", "player_link"]
     placeholders = ["%s", "%s", "%s"]
     for ts in ("created_at", "updated_at"):
         if ts in columns:
             names.append(ts)
             placeholders.append("now()")
+    if stamp and "first_seen_at" in columns:
+        names.append("first_seen_at")
+        placeholders.append("now()")
     cur.execute(
         f"INSERT INTO {TABLE} ({', '.join(names)}) VALUES ({', '.join(placeholders)})",
         [episode_id, voiceover_id, link],
     )
 
 
-def _insert_episode(cur, season_id: int, number: Any, link: str) -> int:
-    """Новая серия (как load.insert_episode), но с возвратом id — он нужен для источника."""
+def _insert_episode(cur, season_id: int, number: Any, link: str, *, stamp: bool = False) -> int:
+    """Новая серия (как load.insert_episode), но с возвратом id — он нужен для источника.
+    stamp — записать в episodes.first_available_at время обнаружения серии."""
+    extra_name = ", first_available_at" if stamp else ""
+    extra_value = ", now()" if stamp else ""
     cur.execute(
-        "INSERT INTO episodes (season_id, episode_number, title, player_link) "
-        "VALUES (%s, %s, %s, %s) RETURNING id",
+        f"INSERT INTO episodes (season_id, episode_number, title, player_link{extra_name}) "
+        f"VALUES (%s, %s, %s, %s{extra_value}) RETURNING id",
         (season_id, number, f"Серия {number}", link),
     )
     return cur.fetchone()[0]
+
+
+def refresh_episode_stats(cur, episode_ids: list[int]) -> None:
+    """Пересчитывает episodes.sources_count и first_available_at у серий, у которых
+    добавились источники. first_available_at только уменьшается (LEAST игнорирует NULL),
+    так что время, поставленное при создании серии, не затирается."""
+    if not episode_ids:
+        return
+    cur.execute(
+        "UPDATE episodes e SET sources_count = c.cnt, "
+        "first_available_at = LEAST(e.first_available_at, c.first_seen) "
+        f"FROM (SELECT episode_id, count(*) AS cnt, min(first_seen_at) AS first_seen FROM {TABLE} "
+        "WHERE episode_id = ANY(%s) GROUP BY episode_id) c "
+        "WHERE e.id = c.episode_id AND (e.sources_count IS DISTINCT FROM c.cnt "
+        "OR e.first_available_at IS DISTINCT FROM LEAST(e.first_available_at, c.first_seen))",
+        (episode_ids,),
+    )
+
+
+def aired_cap(rec: dict[str, Any]) -> int | None:
+    """Верхняя граница номера серии у онгоинга: episodes_aired Kodik + небольшой запас
+    (Kodik/Shikimori обновляют счётчик с задержкой). Только для записи из одного сезона:
+    у многосезонной записи счётчик относится не к одному сезону. Иначе — None."""
+    if not is_ongoing(rec.get("status")) or len(rec.get("seasons") or []) != 1:
+        return None
+    try:
+        aired = int(rec.get("episodesAired") or 0)
+    except (TypeError, ValueError):
+        return None
+    return aired + AIRED_SLACK if aired > 0 else None
 
 
 def sync_season_sources(
@@ -250,6 +358,9 @@ def sync_season_sources(
     *,
     create_episodes: bool = False,
     max_ahead: int = DEFAULT_MAX_AHEAD,
+    features: Features = NO_FEATURES,
+    stamp: bool = False,
+    cap: int | None = None,
 ) -> None:
     cur.execute(
         "SELECT id, episode_number, player_link FROM episodes WHERE season_id = %s",
@@ -261,7 +372,10 @@ def sync_season_sources(
         if number is not None:
             episode_ids[number] = ep_id
             episode_links[ep_id] = old_link
-    ahead_limit = max(episode_ids, default=0) + max_ahead
+    highest = max(episode_ids, default=0)
+    ahead_limit = highest + max_ahead
+    if cap is not None:
+        ahead_limit = min(ahead_limit, max(highest, cap))
 
     wanted: list[tuple[int, str]] = []
     for ep in sorted(season.get("episodes") or [], key=lambda e: (e.get("number") is None, e.get("number") or 0)):
@@ -276,7 +390,9 @@ def sync_season_sources(
             if number < 0 or number > ahead_limit:
                 stats.far_episodes += 1
                 continue
-            ep_id = _insert_episode(cur, season_id, number, link)
+            ep_id = _insert_episode(
+                cur, season_id, number, link, stamp=stamp and features.episode_dates
+            )
             episode_ids[number] = ep_id
             episode_links[ep_id] = link
             stats.episodes_created += 1
@@ -300,17 +416,63 @@ def sync_season_sources(
     for ep_id, source_id, link in cur.fetchall():
         existing.setdefault(ep_id, (source_id, link))
 
+    inserted: list[int] = []
     for ep_id, link in wanted:
         current = existing.get(ep_id)
         if current is None:
-            _insert_source(cur, columns, ep_id, voiceover_id, link)
+            _insert_source(cur, columns, ep_id, voiceover_id, link, stamp=stamp)
             stats.created += 1
+            inserted.append(ep_id)
         elif current[1] != link:
             assignments = "player_link = %s" + (", updated_at = now()" if "updated_at" in columns else "")
             cur.execute(f"UPDATE {TABLE} SET {assignments} WHERE id = %s", (link, current[0]))
             stats.updated += 1
         else:
             stats.unchanged += 1
+    if features.episode_dates:
+        refresh_episode_stats(cur, inserted)
+
+
+# ─── Сводка по озвучке тайтла (title_dubs) ───────────────────────
+
+def dub_summary(rec: dict[str, Any]) -> tuple[str, int | None, int]:
+    """(kodik_id записи, последняя серия, число серий со ссылкой) по записи Kodik."""
+    numbers = [
+        ep["number"]
+        for season in rec.get("seasons") or []
+        for ep in season.get("episodes") or []
+        if isinstance(ep, dict) and ep.get("number") is not None and ep.get("playerLink")
+    ]
+    return str(rec.get("kodikId") or ""), (max(numbers) if numbers else None), len(numbers)
+
+
+def dub_unchanged(cur, content_id: int, voiceover_id: int, rec: dict[str, Any]) -> bool:
+    """True, если title_dubs уже хранит эту же запись Kodik в том же состоянии
+    (тот же id, время обновления, последняя серия и число серий)."""
+    kodik_id, last_episode, count = dub_summary(rec)
+    cur.execute(
+        f"SELECT (kodik_id = %s AND last_episode IS NOT DISTINCT FROM %s AND episodes_count = %s "
+        f"AND kodik_updated_at IS NOT DISTINCT FROM %s::timestamptz) FROM {TITLE_DUBS} "
+        "WHERE content_id = %s AND voiceover_id = %s",
+        (kodik_id, last_episode, count, rec.get("updatedAt"), content_id, voiceover_id),
+    )
+    row = cur.fetchone()
+    return bool(row and row[0])
+
+
+def save_dub_summary(cur, content_id: int, voiceover_id: int, rec: dict[str, Any]) -> None:
+    kodik_id, last_episode, count = dub_summary(rec)
+    if not kodik_id:
+        return
+    cur.execute(
+        f"INSERT INTO {TITLE_DUBS} (content_id, voiceover_id, kodik_id, last_episode, episodes_count, "
+        "kodik_updated_at, updated_at, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s::timestamptz, now(), now()) "
+        "ON CONFLICT (content_id, voiceover_id) DO UPDATE SET kodik_id = EXCLUDED.kodik_id, "
+        "last_episode = EXCLUDED.last_episode, episodes_count = EXCLUDED.episodes_count, "
+        "kodik_updated_at = EXCLUDED.kodik_updated_at, updated_at = now()",
+        (content_id, voiceover_id, kodik_id, last_episode, count, rec.get("updatedAt")),
+    )
 
 
 def sync_record(
@@ -323,6 +485,7 @@ def sync_record(
     *,
     create_episodes: bool = False,
     max_ahead: int = DEFAULT_MAX_AHEAD,
+    features: Features = NO_FEATURES,
 ) -> None:
     shikimori_id = str(rec.get("shikimoriId") or "").strip()
     content_id = content_index.get(shikimori_id) if shikimori_id else None
@@ -333,19 +496,30 @@ def sync_record(
     rec_seasons = rec.get("seasons") or []
     if not rec_seasons:
         return
+    if features.title_dubs and not features.full and dub_unchanged(cur, content_id, voiceover_id, rec):
+        stats.unchanged_dubs += 1
+        return
     cur.execute("SELECT id, season_number FROM seasons WHERE content_id = %s", (content_id,))
     pairs = pair_seasons(cur.fetchall(), rec_seasons)
     if not pairs:
         stats.ambiguous += 1
         return
+    stamp = stamp_new(features, rec)
+    cap = aired_cap(rec)
     new_episodes_before = stats.episodes_created + stats.episodes_linked
+    created_before = stats.created
     for season_id, season in pairs:
         sync_season_sources(
             cur, columns, voiceover_id, season_id, season, stats,
             create_episodes=create_episodes, max_ahead=max_ahead,
+            features=features, stamp=stamp, cap=cap,
         )
-    if stats.episodes_created + stats.episodes_linked > new_episodes_before:
-        touch_content(cur, content_id, rec.get("updatedAt"))  # новая серия = обновление тайтла
+    if features.title_dubs:
+        save_dub_summary(cur, content_id, voiceover_id, rec)
+    new_episode = stats.episodes_created + stats.episodes_linked > new_episodes_before
+    new_dub_for_known_episode = stamp and stats.created > created_before
+    if new_episode or new_dub_for_known_episode:
+        touch_content(cur, content_id, rec.get("updatedAt"))  # новая серия / озвучка = обновление тайтла
 
 
 def write_records(
@@ -357,6 +531,7 @@ def write_records(
     *,
     create_episodes: bool = False,
     max_ahead: int = DEFAULT_MAX_AHEAD,
+    features: Features = NO_FEATURES,
 ) -> SourceStats:
     stats = SourceStats()
     content_index = load_content_index(cur)
@@ -366,7 +541,7 @@ def write_records(
         try:
             sync_record(
                 cur, columns, voiceover_id, rec, content_index, record_stats,
-                create_episodes=create_episodes, max_ahead=max_ahead,
+                create_episodes=create_episodes, max_ahead=max_ahead, features=features,
             )
         except Exception as exc:  # noqa: BLE001
             cur.execute("ROLLBACK TO SAVEPOINT src")
@@ -381,14 +556,143 @@ def write_records(
 
 # ─── Команда ─────────────────────────────────────────────────────
 
+# ─── Режим «по тайтлу» ───────────────────────────────────────────
+
+def ongoing_shikimori_ids(cur) -> list[str]:
+    """Shikimori ID сериалов, помеченных в БД как ongoing."""
+    support = detect_status_support(cur)
+    if not support.content:
+        raise SystemExit(
+            f"--by-title: в content нет колонки {support.column} (статус выхода) — "
+            "список онгоингов взять неоткуда. Примените миграцию CMS и выполните `sync`."
+        )
+    cur.execute(
+        f"SELECT DISTINCT shikimori_id FROM content WHERE type = 'series' "
+        f"AND shikimori_id IS NOT NULL AND {support.column} = 'ongoing' ORDER BY shikimori_id"
+    )
+    return [str(row[0]).strip() for row in cur.fetchall() if str(row[0]).strip()]
+
+
+def pick_dub_records(
+    records: list[dict[str, Any]], targets: list[Target]
+) -> list[tuple[Target, dict[str, Any]]]:
+    """Из записей Kodik одного тайтла (по записи на озвучку) оставляет записи озвучек
+    справочника, в порядке targets (основная — первой). Если у озвучки несколько записей
+    (например, разные части), берётся с большим числом серий."""
+    by_kodik = {t.kodik_id: t for t in targets}
+    best: dict[int, dict[str, Any]] = {}
+    for rec in records:
+        translation = rec.get("translation") or {}
+        try:
+            kodik_id = int(translation.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if kodik_id not in by_kodik:
+            continue
+        if kodik_id not in best or dub_summary(rec)[2] > dub_summary(best[kodik_id])[2]:
+            best[kodik_id] = rec
+    return [(t, best[t.kodik_id]) for t in targets if t.kodik_id in best]
+
+
+def run_by_title(
+    args: argparse.Namespace,
+    token: str,
+    url: str,
+    targets: list[Target],
+    columns: set[str],
+    known_voiceovers: set[int],
+    create_episodes: bool,
+    max_ahead: int,
+) -> tuple[SourceStats, list[str]]:
+    """Онгоинги из БД, по одному запросу Kodik /search?shikimori_id=… на тайтл — вместо
+    полного прохода каталога по каждой из озвучек: в ответе сразу все озвучки тайтла."""
+    with transaction(url, dry_run=True) as conn:
+        with conn.cursor() as cur:
+            shikimori_ids = ongoing_shikimori_ids(cur)
+    max_titles = getattr(args, "max_titles", None)
+    if max_titles:
+        shikimori_ids = shikimori_ids[:max_titles]
+    print(f"Онгоингов в БД: {len(shikimori_ids)}; запрос Kodik — по одному на тайтл")
+
+    total = SourceStats()
+    failed: list[str] = []
+    changed = False
+    delay = args.delay if args.delay is not None else kodik_delay()
+
+    for start in range(0, len(shikimori_ids), TITLE_CHUNK):
+        chunk = shikimori_ids[start:start + TITLE_CHUNK]
+
+        # 1. Сеть — до открытия транзакции.
+        fetched: list[tuple[str, list[tuple[Target, dict[str, Any]]]]] = []
+        for shikimori_id in chunk:
+            try:
+                records = api.fetch_by_shikimori_id(shikimori_id, token=token)
+            except RuntimeError as exc:
+                failed.append(f"shikimori {shikimori_id}: {exc}")
+                print(f"  [ERR] shikimori {shikimori_id}: {exc}")
+                continue
+            fetched.append((shikimori_id, pick_dub_records(records, targets)))
+            if delay:
+                time.sleep(delay)
+
+        # 2. Запись куска одной транзакцией, каждая озвучка тайтла — в своём SAVEPOINT.
+        with transaction(url, dry_run=args.dry_run) as conn:
+            with conn.cursor() as cur:
+                if not try_advisory_lock(cur):
+                    raise SystemExit("Другая задача пайплайна уже пишет в БД — запуск пропущен, повторите позже.")
+                base = detect_features(cur, columns, full=getattr(args, "full", False))
+                content_index = load_content_index(cur)
+                for shikimori_id, dubs in fetched:
+                    for target, rec in dubs:
+                        features = replace(base, backfill=target.voiceover_id not in known_voiceovers)
+                        record_stats = SourceStats()
+                        cur.execute("SAVEPOINT src")
+                        try:
+                            sync_record(
+                                cur, columns, target.voiceover_id, rec, content_index, record_stats,
+                                create_episodes=create_episodes, max_ahead=max_ahead, features=features,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            cur.execute("ROLLBACK TO SAVEPOINT src")
+                            failed.append(f"{target.title} / shikimori {shikimori_id}: {exc}")
+                            print(f"    [ERR] {target.title} / shikimori {shikimori_id}: {exc}")
+                            continue
+                        cur.execute("RELEASE SAVEPOINT src")
+                        total.add(record_stats)
+                        changed = changed or record_stats.changed()
+        print(f"  … обработано {min(start + TITLE_CHUNK, len(shikimori_ids))} из {len(shikimori_ids)}")
+
+    if changed and not args.dry_run:
+        notify_frontend()
+    return total, failed
+
+
+# ─── Команда ─────────────────────────────────────────────────────
+
+def print_summary(total: SourceStats, prefix: str = "") -> None:
+    print(f"\n{prefix}--- Сводка sync-dubs ---")
+    print(f"Серий создано по ссылкам других озвучек: {total.episodes_created}")
+    print(f"Серий без ссылки — ссылка проставлена: {total.episodes_linked}")
+    print(f"Источников создано: {total.created}")
+    print(f"Ссылок обновлено: {total.updated}")
+    print(f"Без изменений: {total.unchanged}")
+    print(f"Озвучек тайтлов без изменений (пропущены по title_dubs): {total.unchanged_dubs}")
+    print(f"Пропущено — тайтла нет в БД: {total.no_content}")
+    print(f"Пропущено — серии нет в БД (создание выключено): {total.no_episode}")
+    print(f"Пропущено — номер серии слишком далеко от существующих (--max-ahead / episodes_aired): {total.far_episodes}")
+    print(f"Пропущено — сезоны не сопоставляются однозначно: {total.ambiguous}")
+
+
 def run(args: argparse.Namespace) -> None:
     token = args.token or kodik_token()
     url = database_url()
 
     with transaction(url, dry_run=True) as conn:  # только чтение
         with conn.cursor() as cur:
-            require_sources_table(cur)
+            columns = require_sources_table(cur)
             targets = load_targets(cur, args.only)
+            known_voiceovers = voiceovers_with_sources(cur)
+            base_features = detect_features(cur, columns, full=getattr(args, "full", False))
     if not targets:
         raise SystemExit(
             "Нет озвучек с kodik_translation_id. Выполните `match-voiceovers --write`, затем `sync-voiceovers`."
@@ -401,6 +705,24 @@ def run(args: argparse.Namespace) -> None:
     max_ahead = getattr(args, "max_ahead", DEFAULT_MAX_AHEAD)
 
     prefix = "[DRY-RUN, изменения откатены] " if args.dry_run else ""
+    print(
+        f"Озвучек: {len(targets)}; first_seen_at: {'да' if base_features.first_seen else 'нет'}; "
+        f"даты серий: {'да' if base_features.episode_dates else 'нет'}; "
+        f"title_dubs: {'да' if base_features.title_dubs else 'нет'}"
+    )
+    if not base_features.first_seen:
+        print("  (колонок новой схемы нет — применяйте миграцию CMS 20261010_120000, чтобы копить даты появления)")
+
+    if getattr(args, "by_title", False):
+        total, failed = run_by_title(
+            args, token, url, targets, columns, known_voiceovers, create_episodes, max_ahead,
+        )
+        print_summary(total, prefix)
+        if failed:
+            print(f"Ошибок: {len(failed)}")
+            raise SystemExit(f"sync-dubs завершён с ошибками ({len(failed)}).")
+        return
+
     total = SourceStats()
     failed: list[str] = []
     skipped: list[str] = []
@@ -428,9 +750,13 @@ def run(args: argparse.Namespace) -> None:
                     print("  Другая задача пайплайна пишет в БД — озвучка пропущена.")
                     continue
                 columns = require_sources_table(cur)
+                features = replace(
+                    detect_features(cur, columns, full=getattr(args, "full", False)),
+                    backfill=target.voiceover_id not in voiceovers_with_sources(cur),
+                )
                 stats = write_records(
                     cur, columns, target.voiceover_id, records, failed,
-                    create_episodes=create_episodes, max_ahead=max_ahead,
+                    create_episodes=create_episodes, max_ahead=max_ahead, features=features,
                 )
 
         total.add(stats)
@@ -438,21 +764,13 @@ def run(args: argparse.Namespace) -> None:
             f"  записей Kodik: {len(records)}; +{stats.created} новых, "
             f"~{stats.updated} ссылок обновлено, без изменений {stats.unchanged}"
             + (f"; новых серий: {stats.episodes_created}" if stats.episodes_created else "")
+            + (f"; пропущено по title_dubs: {stats.unchanged_dubs}" if stats.unchanged_dubs else "")
         )
 
     if total.changed() and not args.dry_run:
         notify_frontend()
 
-    print(f"\n{prefix}--- Сводка sync-dubs ---")
-    print(f"Серий создано по ссылкам других озвучек: {total.episodes_created}")
-    print(f"Серий без ссылки — ссылка проставлена: {total.episodes_linked}")
-    print(f"Источников создано: {total.created}")
-    print(f"Ссылок обновлено: {total.updated}")
-    print(f"Без изменений: {total.unchanged}")
-    print(f"Пропущено — тайтла нет в БД: {total.no_content}")
-    print(f"Пропущено — серии нет в БД (создание выключено): {total.no_episode}")
-    print(f"Пропущено — номер серии слишком далеко от существующих (--max-ahead): {total.far_episodes}")
-    print(f"Пропущено — сезоны не сопоставляются однозначно: {total.ambiguous}")
+    print_summary(total, prefix)
     if skipped:
         print(f"Пропущены из-за блокировки: {', '.join(skipped)}")
     if failed:

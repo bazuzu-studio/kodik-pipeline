@@ -9,7 +9,7 @@
     python pipeline.py fix-seasons      убрать дубли сезонов в БД (после fetch)
     python pipeline.py sync-voiceovers  справочник озвучек (voiceovers.json) -> Postgres
     python pipeline.py match-voiceovers найти id озвучек Kodik для voiceovers.json
-    python pipeline.py sync-dubs        ссылки на плеер по каждой озвучке -> episode_sources
+    python pipeline.py sync-dubs        ссылки на плеер по каждой озвучке -> episode_sources (--by-title: онгоинги по тайтлам)
     python pipeline.py sync-schedule    даты серий и «следующая серия» из AniList
     python pipeline.py posters          постеры -> S3/MinIO
     python pipeline.py check-s3         проверка S3/MinIO
@@ -199,8 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-ahead", type=int, default=50, metavar="N",
         help="не создавать серию с номером дальше N от самой большой существующей (защита от чужой нумерации), по умолчанию 50",
     )
+    p.add_argument(
+        "--by-title", action="store_true",
+        help="онгоинги из БД, один запрос Kodik на тайтл (в ответе сразу все озвучки) — быстрее --ongoing-only",
+    )
+    p.add_argument("--max-titles", type=int, help="для --by-title: не больше N тайтлов (для проверок)")
+    p.add_argument(
+        "--full", action="store_true",
+        help="не пропускать озвучки, у которых по title_dubs ничего не изменилось (после fix-seasons, удаления серий)",
+    )
     p.add_argument("--limit", type=int, default=None, help="записей на страницу (KODIK_LIMIT)")
-    p.add_argument("--delay", type=float, default=None, help="пауза между страницами, сек (KODIK_DELAY)")
+    p.add_argument("--delay", type=float, default=None, help="пауза между страницами/запросами, сек (KODIK_DELAY)")
     p.add_argument("--max-pages", type=int, help="ограничить число страниц на озвучку (для проверок)")
     p.add_argument("--token", help="по умолчанию KODIK_TOKEN")
     p.add_argument("--dry-run", action="store_true", help="выполнить всё, но откатить изменения в БД")

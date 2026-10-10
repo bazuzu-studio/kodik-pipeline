@@ -143,15 +143,15 @@ pytest
 Минимальные переменные:
 
 ```env
-DATABASE_URL=postgres://user:password@127.0.0.1:5432/movhub
-S3_BUCKET=media
-S3_ENDPOINT=http://localhost:9000
-S3_REGION=us-east-1
-S3_ACCESS_KEY_ID=...
-S3_SECRET_ACCESS_KEY=...
-S3_PUBLIC_URL=http://localhost:9000/media
-KODIK_TOKEN=YOUR_KODIK_TOKEN_HERE
-KODIK_TRANSLATION_ID=609
+$env:DATABASE_URL='postgres://user:password@127.0.0.1:5432/movhub'
+$env:S3_BUCKET='media'
+$env:S3_ENDPOINT='http://localhost:9000'
+$env:S3_REGION='us-east-1'
+$env:S3_ACCESS_KEY_ID='minioadmin'
+$env:S3_SECRET_ACCESS_KEY='supersecretpassword'
+$env:S3_PUBLIC_URL='http://localhost:9000/media'
+$env:KODIK_TOKEN='6a99de2e4189a853b6b87ead73d11dd5'
+$env:KODIK_TRANSLATION_ID=609
 ```
 
 ## Деплой в Dokploy

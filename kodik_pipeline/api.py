@@ -498,3 +498,41 @@ def fetch_by_kodik_id(
         if isinstance(item, dict) and str(item.get("id")) == str(kodik_id):
             return normalize_item(item)
     return None
+
+
+def fetch_by_shikimori_id(
+    shikimori_id: str,
+    *,
+    token: str | None = None,
+) -> list[dict[str, Any]]:
+    """Все записи Kodik одного тайтла (по записи на озвучку) через /search?shikimori_id=…
+
+    В отличие от /list с translation_id, один запрос возвращает сразу все озвучки тайтла —
+    на этом построен `sync-dubs --by-title`. Озвучка записи — rec["translation"]["id"].
+    Возвращаются только сериалы (type == "series").
+    """
+    token = token or require_env("KODIK_TOKEN")
+    params = {
+        "token": token,
+        "shikimori_id": shikimori_id,
+        "with_episodes": "true",
+        "with_material_data": "true",
+        "limit": 100,
+    }
+    payload = _request_url(f"{SEARCH_URL}?{urllib.parse.urlencode(params)}")
+    results = payload.get("results") or []
+    if not isinstance(results, list):
+        raise RuntimeError("Kodik API: поле results имеет неожиданный тип")
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id and item_id in seen:
+            continue
+        seen.add(item_id)
+        rec = normalize_item(item)
+        if rec.get("type") == "series":
+            records.append(rec)
+    return records

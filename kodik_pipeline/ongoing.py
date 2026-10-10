@@ -28,7 +28,7 @@ from typing import Any
 
 from . import api
 from .config import database_url
-from .db import transaction, try_advisory_lock
+from .db import table_columns, transaction, try_advisory_lock
 from .load import insert_episode
 from .revalidate import notify_frontend
 from .seasons import SeasonStats, sync_content_seasons
@@ -44,6 +44,7 @@ class UpdateStats:
     new_seasons: int = 0
     merged_seasons: int = 0
     status_changed: int = 0
+    stamp_available: bool = False  # есть episodes.first_available_at — ставим время обнаружения новых серий
     finished: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -51,7 +52,9 @@ class UpdateStats:
 
 # ─── Серии и сезоны ──────────────────────────────────────────────
 
-def sync_episodes(cur, season_id: int, episodes: list[dict[str, Any]]) -> tuple[int, int]:
+def sync_episodes(
+    cur, season_id: int, episodes: list[dict[str, Any]], *, stamp: bool = False
+) -> tuple[int, int]:
     """Сверяет серии сезона с Kodik одним SELECT-ом.
     Возвращает (создано, ссылок обновлено). Существующие серии без изменений
     ссылки не трогаются (и их updated_at не меняется)."""
@@ -76,7 +79,7 @@ def sync_episodes(cur, season_id: int, episodes: list[dict[str, Any]]) -> tuple[
                 )
                 changed += 1
         else:
-            insert_episode(cur, season_id, number, link)
+            insert_episode(cur, season_id, number, link, stamp_available=stamp)
             created += 1
     return created, changed
 
@@ -114,7 +117,9 @@ def update_record(cur, rec: dict[str, Any], support: StatusSupport, stats: Updat
 
     def on_season(season_id: int, season: dict[str, Any]) -> None:
         nonlocal new_eps, changed_links
-        created, changed = sync_episodes(cur, season_id, season.get("episodes") or [])
+        created, changed = sync_episodes(
+            cur, season_id, season.get("episodes") or [], stamp=stats.stamp_available
+        )
         new_eps += created
         changed_links += changed
 
@@ -235,6 +240,7 @@ def run(args: argparse.Namespace) -> None:
             if not try_advisory_lock(cur):
                 raise SystemExit("Другая задача пайплайна уже пишет в БД — запуск пропущен.")
             support = detect_status_support(cur)
+            stats.stamp_available = "first_available_at" in table_columns(cur, "episodes")
 
             for rec in records + stale_records:
                 stats.checked += 1
